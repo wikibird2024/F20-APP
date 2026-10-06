@@ -8,3 +8,6 @@ build/
 logs/
 spectra/
 f20data.db
+
+# IDE analyzer cache (clangd)
+.cache/
