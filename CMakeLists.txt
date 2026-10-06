@@ -13,7 +13,7 @@ enable_testing()
 
 add_subdirectory(common)    # protocol library, no Qt
 add_subdirectory(sim)       # f20bridge-sim
-# add_subdirectory(app)       # f20app (Qt 6) + its Qt-free core
+add_subdirectory(app)       # f20app (Qt 6) + its Qt-free core
 add_subdirectory(tests)     # unit tests (doctest)
 
 # Added in phase 6, built on Windows only:
