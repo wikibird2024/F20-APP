@@ -18,6 +18,7 @@ public:
     using ReplyHandler = std::function<void(const f20::Reply&)>;
 
     explicit BridgeClient(QObject* parent = nullptr);
+    ~BridgeClient() override;
 
     void connectToBridge(const QString& host, quint16 port);
     void disconnectFromBridge();

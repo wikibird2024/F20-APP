@@ -14,6 +14,16 @@ BridgeClient::BridgeClient(QObject* parent) : QObject(parent) {
     });
 }
 
+BridgeClient::~BridgeClient() {
+    // Members die in reverse declaration order: pending_ and
+    // reconnectTimer_ go before socket_. The socket's destructor emits
+    // disconnected, which would run onDisconnected() against those dead
+    // members - so unhook the socket from this object first.
+    socket_.disconnect(this);
+    reconnectTimer_.stop();
+    socket_.abort();
+}
+
 void BridgeClient::connectToBridge(const QString& host, quint16 port) {
     host_ = host;
     port_ = port;
