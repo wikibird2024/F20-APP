@@ -5,9 +5,13 @@ Automation for the Filmetrics F20 thin-film analyzer: a Qt 6 operator app
 
 ## Build (Linux, development)
 
-    cmake --preset default
-    cmake --build build
-    ./build/sim/f20bridge-sim
+    ./tool/build.sh              # Debug (default), or: ./tool/build.sh Release
+    ctest --preset Debug         # unit tests
+
+Run against the simulator (two terminals):
+
+    ./build/Debug/bin/f20bridge-sim
+    ./build/Debug/bin/f20app
 
 ## Documents
 

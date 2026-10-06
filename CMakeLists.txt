@@ -1,13 +1,15 @@
 # F20 control software — top-level build file.
-# Build:   cmake --preset default      (configure once, into build/)
-#          cmake --build build         (compile; repeat after every edit)
-#          ctest --test-dir build      (run the unit tests)
+# Build:   ./tool/build.sh [Debug|Release]     (configure + build + verify)
+# Tests:   ctest --preset Debug
 cmake_minimum_required(VERSION 3.22)
 project(f20software LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # lets the IDE's analyzer see includes
+
+# All programs land in one place; tool/build.sh verifies them there.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 enable_testing()
 

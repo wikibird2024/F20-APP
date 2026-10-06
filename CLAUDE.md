@@ -17,10 +17,13 @@ Windows-only, added in phase 6), `tests/`.
 ## Building (Linux, development)
 
 ```bash
-cmake --preset default     # configure once into build/
-cmake --build build        # compile
-ctest --test-dir build     # run unit tests (from phase 1)
+./tool/build.sh            # configure + build + verify (Debug; or: Release)
+ctest --preset Debug       # run unit tests
 ```
+
+Binaries land in `build/<preset>/bin/`. `tool/build.sh` follows the dotfiles
+template (`~/dotfiles/project_scripts/build.sh`): only its settings block is
+project-specific — keep the body in sync with the template.
 
 The production targets are Windows/MSVC (spec §8); Linux is for development
 against the simulator only.

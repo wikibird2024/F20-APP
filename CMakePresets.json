@@ -2,11 +2,30 @@
   "version": 4,
   "configurePresets": [
     {
-      "name": "default",
-      "displayName": "Linux Debug (Ninja)",
+      "name": "base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "Debug",
+      "displayName": "Linux Debug (Ninja)",
+      "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "Release",
+      "displayName": "Linux Release (Ninja)",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     }
+  ],
+  "buildPresets": [
+    { "name": "Debug", "configurePreset": "Debug" },
+    { "name": "Release", "configurePreset": "Release" }
+  ],
+  "testPresets": [
+    { "name": "Debug", "configurePreset": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "Release", "configurePreset": "Release", "output": { "outputOnFailure": true } }
   ]
 }
