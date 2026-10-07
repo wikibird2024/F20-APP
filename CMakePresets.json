@@ -18,14 +18,26 @@
       "displayName": "Linux Release (Ninja)",
       "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "asan",
+      "displayName": "Linux Debug + AddressSanitizer/UBSan (Ninja)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
     }
   ],
   "buildPresets": [
     { "name": "Debug", "configurePreset": "Debug" },
-    { "name": "Release", "configurePreset": "Release" }
+    { "name": "Release", "configurePreset": "Release" },
+    { "name": "asan", "configurePreset": "asan" }
   ],
   "testPresets": [
     { "name": "Debug", "configurePreset": "Debug", "output": { "outputOnFailure": true } },
-    { "name": "Release", "configurePreset": "Release", "output": { "outputOnFailure": true } }
+    { "name": "Release", "configurePreset": "Release", "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } }
   ]
 }

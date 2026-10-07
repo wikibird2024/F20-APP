@@ -1,5 +1,8 @@
 #pragma once
+#include <QDateTime>
 #include <QWizard>
+
+#include <optional>
 
 class BridgeClient;
 class QComboBox;
@@ -12,6 +15,12 @@ class BaselineWizard : public QWizard {
 public:
     BaselineWizard(BridgeClient& bridge, QWidget* parent = nullptr);
 
-signals:
-    void baselineCommitted();
+    // When baselineCommit succeeded; empty if the operator never got that
+    // far. The baseline age counts from here, not from closing the dialog.
+    std::optional<QDateTime> committedAtUtc() const { return committedAtUtc_; }
+    QString referenceMaterial() const { return referenceMaterial_; }
+
+private:
+    std::optional<QDateTime> committedAtUtc_;
+    QString referenceMaterial_;
 };

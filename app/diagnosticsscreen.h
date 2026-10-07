@@ -7,23 +7,24 @@ class QPushButton;
 
 // Diagnostics screen (spec §7.4): bridge/FILMeasure state, signal health,
 // protocol log tail, bridge reconnect button.
-class DiagnosticsScreen : public QWidget {
+class DiagnosticsScreen : public QWidget
+{
     Q_OBJECT
-public:
-    explicit DiagnosticsScreen(QWidget* parent = nullptr);
+  public:
+    explicit DiagnosticsScreen(QWidget *parent = nullptr);
 
-    void setBridgeState(const QString& text, bool healthy);
-    void setVersions(const QString& text);
+    void setBridgeState(const QString &text, bool healthy);
+    void setVersions(const QString &text);
     void setSignalHealth(int referenceCounts, int backgroundCounts);
-    void appendLog(const QString& line);
+    void appendLog(const QString &line);
 
-signals:
+  signals:
     void refreshRequested();
     void restartBridgeRequested();
 
-private:
-    QLabel* bridgeState_;
-    QLabel* versions_;
-    QLabel* signalHealth_;
-    QPlainTextEdit* log_;
+  private:
+    QLabel         *bridgeState_;
+    QLabel         *versions_;
+    QLabel         *signalHealth_;
+    QPlainTextEdit *log_;
 };

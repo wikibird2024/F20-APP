@@ -1,6 +1,9 @@
 #include "doctest.h"
 #include "simengine.h"
 
+#include <filesystem>
+#include <fstream>
+
 using f20::Request;
 using f20sim::SimEngine;
 
@@ -114,4 +117,46 @@ TEST_CASE("quit sets the flag that stops the server loop") {
     CHECK_FALSE(engine.quitRequested());
     CHECK(engine.handle(req(1, "quit")).ok);
     CHECK(engine.quitRequested());
+}
+
+TEST_CASE("parameters of the wrong type give an error reply, not an exception") {
+    SimEngine engine;
+    auto reply = engine.handle(req(1, "setThicknessNm", {{"layer", "1"}, {"nm", 5}}));
+    CHECK_FALSE(reply.ok);
+    CHECK(reply.errorCode == "layerOutOfBounds");
+
+    reply = engine.handle(req(2, "setRecipe", {{"name", 5}}));
+    CHECK_FALSE(reply.ok);
+    CHECK(reply.errorCode == "recipeNotFound");
+
+    reply = engine.handle(req(3, "openSpectrum", {{"path", 5}}));
+    CHECK_FALSE(reply.ok);
+    CHECK(reply.errorCode == "fileOpenFailed");
+}
+
+TEST_CASE("openSpectrum with a bad number gives fileOpenFailed") {
+    const auto path = std::filesystem::temp_directory_path() / "f20tests_bad_spectrum.csv";
+    std::ofstream(path) << "wavelengthNm,reflectance\n400,0.2\nabc,0.3\n";
+    SimEngine engine;
+    const auto reply = engine.handle(req(1, "openSpectrum", {{"path", path.string()}}));
+    std::filesystem::remove(path);
+    CHECK_FALSE(reply.ok);
+    CHECK(reply.errorCode == "fileOpenFailed");
+    CHECK(reply.errorMessage.find("line 3") != std::string::npos);
+}
+
+TEST_CASE("a saved spectrum opens again and analyzes") {
+    const auto path = std::filesystem::temp_directory_path() / "f20tests_spectrum.csv";
+    SimEngine engine;
+    engine.handle(req(1, "setRecipe", {{"name", "SiO2 on Si"}}));
+    runBaseline(engine);
+    REQUIRE(engine.handle(req(2, "acquireSpectrum")).ok);
+    REQUIRE(engine.handle(req(3, "saveSpectrum", {{"path", path.string()}})).ok);
+
+    SimEngine fresh;
+    fresh.handle(req(1, "setRecipe", {{"name", "SiO2 on Si"}}));
+    const auto opened = fresh.handle(req(2, "openSpectrum", {{"path", path.string()}}));
+    std::filesystem::remove(path);
+    CHECK(opened.ok);
+    CHECK(fresh.handle(req(3, "analyzeSpectrum")).ok);
 }

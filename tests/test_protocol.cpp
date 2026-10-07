@@ -51,3 +51,23 @@ TEST_CASE("garbage input never throws, returns empty") {
     CHECK(std::holds_alternative<std::monostate>(parseIncoming("{{{{")));
     CHECK(std::holds_alternative<std::monostate>(parseIncoming("[1,2]")));
 }
+
+TEST_CASE("fields of the wrong type never throw (nlohmann value() would)") {
+    // error.code is a number, error.message an array: still an error reply.
+    const Incoming incoming = parseIncoming(R"({"id":1,"ok":false,"error":{"code":5,"message":[1]}})");
+    REQUIRE(std::holds_alternative<Reply>(incoming));
+    const auto& reply = std::get<Reply>(incoming);
+    CHECK_FALSE(reply.ok);
+    CHECK(reply.errorCode.empty());
+    CHECK(reply.errorMessage.empty());
+
+    CHECK(std::holds_alternative<std::monostate>(parseIncoming(R"({"id":"7","ok":true})")));
+    CHECK(std::holds_alternative<std::monostate>(parseIncoming(R"({"id":1,"ok":"yes"})")));
+    CHECK(std::holds_alternative<std::monostate>(parseIncoming(R"({"event":5})")));
+    CHECK_FALSE(parseRequest(R"({"id":1,"cmd":7})").has_value());
+}
+
+TEST_CASE("an id that does not fit in int is rejected, not narrowed") {
+    CHECK_FALSE(parseRequest(R"({"id":4294967297,"cmd":"getStatus"})").has_value());
+    CHECK(std::holds_alternative<std::monostate>(parseIncoming(R"({"id":-4294967297,"ok":true})")));
+}

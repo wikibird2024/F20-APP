@@ -31,3 +31,24 @@ TEST_CASE("CRLF line endings are tolerated") {
     CHECK(lines[0] == "abc");
     CHECK(lines[1] == "def");
 }
+
+TEST_CASE("a line over the cap overflows and frees the buffer (Redis rule)") {
+    LineSplitter splitter(16);
+    auto lines = splitter.feed("short\n" + std::string(20, 'x'));
+    REQUIRE(lines.size() == 1); // the line before the long one still comes out
+    CHECK(lines[0] == "short");
+    CHECK(splitter.overflowed());
+    CHECK(splitter.feed("more\n").empty()); // nothing until reset()
+
+    splitter.reset();
+    CHECK_FALSE(splitter.overflowed());
+    lines = splitter.feed("again\n");
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0] == "again");
+}
+
+TEST_CASE("a complete line over the cap also overflows") {
+    LineSplitter splitter(4);
+    CHECK(splitter.feed("toolong\n").empty());
+    CHECK(splitter.overflowed());
+}

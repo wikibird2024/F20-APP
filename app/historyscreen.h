@@ -5,6 +5,7 @@ class Storage;
 class QTableView;
 class QSqlQueryModel;
 class QComboBox;
+class QLabel;
 class QPushButton;
 class QLineSeries;
 class QChartView;
@@ -15,6 +16,9 @@ class HistoryScreen : public QWidget {
     Q_OBJECT
 public:
     explicit HistoryScreen(Storage& storage, QWidget* parent = nullptr);
+
+    // One line under the buttons: export done, re-analysis failed, ...
+    void showStatus(const QString& text, bool isError);
 
 public slots:
     void refresh();
@@ -30,6 +34,7 @@ private:
     QTableView* table_;
     QSqlQueryModel* model_;
     QComboBox* recipeFilter_;
+    QLabel* statusLabel_;
     QLineSeries* trendSeries_;
     QLineSeries* meanSeries_;
     QLineSeries* upperSeries_;

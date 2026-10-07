@@ -6,8 +6,10 @@ const char* toString(AppState state) {
     switch (state) {
     case AppState::Starting:   return "starting";
     case AppState::NoBaseline: return "noBaseline";
+    case AppState::Baselining: return "baselining";
     case AppState::Ready:      return "ready";
     case AppState::Measuring:  return "measuring";
+    case AppState::Analyzing:  return "analyzing";
     case AppState::Fault:      return "fault";
     }
     return "?";
@@ -41,18 +43,53 @@ void AppStateMachine::onBaselineValid() {
 }
 
 void AppStateMachine::onBaselineInvalid() {
-    if (state_ == AppState::Ready)
+    switch (state_) {
+    case AppState::Ready:
         setState(AppState::NoBaseline);
+        break;
+    case AppState::Measuring:
+        baselineLostWhileMeasuring_ = true;
+        break;
+    case AppState::Analyzing:
+        afterAnalyze_ = AppState::NoBaseline;
+        break;
+    default:
+        break;
+    }
+}
+
+void AppStateMachine::onBaselineWizardOpened() {
+    if (isIdle())
+        setState(AppState::Baselining);
+}
+
+void AppStateMachine::onBaselineWizardClosed(bool committed) {
+    if (state_ == AppState::Baselining)
+        setState(committed ? AppState::Ready : AppState::NoBaseline);
 }
 
 void AppStateMachine::onMeasureStarted() {
-    if (state_ == AppState::Ready)
+    if (state_ == AppState::Ready) {
+        baselineLostWhileMeasuring_ = false;
         setState(AppState::Measuring);
+    }
 }
 
 void AppStateMachine::onMeasureFinished() {
     if (state_ == AppState::Measuring)
-        setState(AppState::Ready);
+        setState(baselineLostWhileMeasuring_ ? AppState::NoBaseline : AppState::Ready);
+}
+
+void AppStateMachine::onAnalyzeStarted() {
+    if (isIdle()) {
+        afterAnalyze_ = state_;
+        setState(AppState::Analyzing);
+    }
+}
+
+void AppStateMachine::onAnalyzeFinished() {
+    if (state_ == AppState::Analyzing)
+        setState(afterAnalyze_);
 }
 
 } // namespace f20app

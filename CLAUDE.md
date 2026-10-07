@@ -17,9 +17,13 @@ Windows-only, added in phase 6), `tests/`.
 ## Building (Linux, development)
 
 ```bash
-./tool/build.sh            # configure + build + verify (Debug; or: Release)
-ctest --preset Debug       # run unit tests
+./tool/build.sh            # configure + build + verify (Debug; or: Release, asan)
+ctest --preset Debug       # run unit tests (f20tests: doctest, f20apptests: QtTest)
 ```
+
+`asan` = Debug + AddressSanitizer/UBSan. f20app reads `f20.ini` next to
+its executable (`--config` overrides); the build copies it and `recipes/`
+into `build/<preset>/bin/`.
 
 Binaries land in `build/<preset>/bin/`. `tool/build.sh` follows the dotfiles
 template (`~/dotfiles/project_scripts/build.sh`): only its settings block is

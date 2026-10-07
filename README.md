@@ -5,13 +5,21 @@ Automation for the Filmetrics F20 thin-film analyzer: a Qt 6 operator app
 
 ## Build (Linux, development)
 
-    ./tool/build.sh              # Debug (default), or: ./tool/build.sh Release
-    ctest --preset Debug         # unit tests
+    ./tool/build.sh              # Debug (default), or: Release, asan
+    ctest --preset Debug         # unit tests (doctest + QtTest)
+
+`asan` is Debug with AddressSanitizer and UBSan: run its tests
+(`ctest --preset asan`) before trusting a change to memory or lifetimes.
 
 Run against the simulator (two terminals):
 
     ./build/Debug/bin/f20bridge-sim
     ./build/Debug/bin/f20app
+
+f20app reads `f20.ini` next to its executable (or `--config <file>`); the
+build copies `f20.ini` and `recipes/` there. Relative paths in the ini -
+database, recipes, spectra, logs - are relative to the ini's folder, so in
+development the data lands in `build/<preset>/bin/`.
 
 ## Documents
 

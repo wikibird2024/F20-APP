@@ -19,7 +19,7 @@ cd "$SCRIPT_DIR/.."   # the script lives in tool/, the project is one up
 # Project settings -- edit these for each project
 ###############################################################################
 
-PRESETS=(Debug Release)  # CMakePresets.json names; the first one is the default
+PRESETS=(Debug Release asan)  # CMakePresets.json names; the first one is the default
 BUILD_ROOT="build"       # the presets' binaryDir without the preset name
 ARTIFACTS=()             # no firmware files in this project
 PROGRAM="f20app"         # PC program: executable name in $BUILD_DIR/bin

@@ -19,16 +19,19 @@ std::optional<int> BaselineTracker::ageMinutes(Clock::time_point now) const {
     if (!committedAt_)
         return std::nullopt;
     const auto age = std::chrono::duration_cast<std::chrono::minutes>(now - *committedAt_);
-    return static_cast<int>(age.count());
+    return age.count() < 0 ? 0 : static_cast<int>(age.count());
 }
 
 BaselineStatus BaselineTracker::status(Clock::time_point now) const {
-    const auto age = ageMinutes(now);
-    if (!age)
+    if (!committedAt_)
         return BaselineStatus::None;
-    if (*age >= blockMinutes_)
+    const auto age = now - *committedAt_;
+    // The clock was set back: the true age is unknown, so treat it as too old.
+    if (age < Clock::duration::zero())
         return BaselineStatus::Stale;
-    if (*age >= warnMinutes_)
+    if (age > std::chrono::minutes(blockMinutes_))
+        return BaselineStatus::Stale;
+    if (age > std::chrono::minutes(warnMinutes_))
         return BaselineStatus::Aging;
     return BaselineStatus::Fresh;
 }

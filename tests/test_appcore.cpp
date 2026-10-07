@@ -1,6 +1,8 @@
 #include "doctest.h"
 #include "appstatemachine.h"
 #include "baselinetracker.h"
+#include "filenames.h"
+#include "measuregate.h"
 
 using namespace f20app;
 using namespace std::chrono_literals;
@@ -76,6 +78,111 @@ TEST_CASE("baseline tracker: fresh / aging / stale per spec 7.2") {
     CHECK_ENUM_EQ(tracker.status(t0 + 31min), BaselineStatus::Stale);
     CHECK(*tracker.ageMinutes(t0 + 21min) == 21);
 
+    // Spec §6.2 says "> 30 min": exactly 30:00 is still aging.
+    CHECK_ENUM_EQ(tracker.status(t0 + 20min), BaselineStatus::Fresh);
+    CHECK_ENUM_EQ(tracker.status(t0 + 30min), BaselineStatus::Aging);
+    CHECK_ENUM_EQ(tracker.status(t0 + 30min + 1s), BaselineStatus::Stale);
+
     tracker.invalidate();
     CHECK_ENUM_EQ(tracker.status(t0 + 21min), BaselineStatus::None);
+}
+
+TEST_CASE("a restored commit time keeps its real age; a clock set back is stale") {
+    BaselineTracker tracker;
+    tracker.setThresholds(20, 30);
+    const auto now = BaselineTracker::Clock::now();
+
+    tracker.committed(now - 29min); // restored from the database
+    CHECK_ENUM_EQ(tracker.status(now), BaselineStatus::Aging);
+    CHECK_ENUM_EQ(tracker.status(now + 2min), BaselineStatus::Stale);
+
+    tracker.committed(now + 5min); // commit time in the future
+    CHECK_ENUM_EQ(tracker.status(now), BaselineStatus::Stale);
+    CHECK(*tracker.ageMinutes(now) == 0);
+}
+
+TEST_CASE("wizard: Baselining blocks measuring; commit -> Ready, cancel -> NoBaseline") {
+    AppStateMachine machine;
+    machine.onBridgeUp();
+    CHECK(machine.canOpenBaselineWizard());
+    machine.onBaselineWizardOpened();
+    CHECK_ENUM_EQ(machine.state(), AppState::Baselining);
+    CHECK_FALSE(machine.canMeasure());
+    CHECK_FALSE(machine.canOpenBaselineWizard());
+    machine.onBaselineWizardClosed(true);
+    CHECK_ENUM_EQ(machine.state(), AppState::Ready);
+
+    machine.onBaselineWizardOpened(); // redo from Ready, then cancel
+    machine.onBaselineWizardClosed(false);
+    CHECK_ENUM_EQ(machine.state(), AppState::NoBaseline);
+
+    machine.onBaselineWizardOpened();
+    machine.onBridgeDown(); // bridge lost while the wizard is open
+    machine.onBaselineWizardClosed(true);
+    CHECK_ENUM_EQ(machine.state(), AppState::Fault);
+}
+
+TEST_CASE("re-analysis returns to the state it came from") {
+    AppStateMachine machine;
+    machine.onBridgeUp();
+    machine.onAnalyzeStarted();
+    CHECK_ENUM_EQ(machine.state(), AppState::Analyzing);
+    machine.onAnalyzeFinished();
+    CHECK_ENUM_EQ(machine.state(), AppState::NoBaseline);
+
+    machine.onBaselineValid();
+    machine.onAnalyzeStarted();
+    machine.onBaselineInvalid(); // e.g. remote invalidate during the analysis
+    machine.onAnalyzeFinished();
+    CHECK_ENUM_EQ(machine.state(), AppState::NoBaseline);
+
+    machine.onBaselineValid();
+    machine.onMeasureStarted();
+    CHECK_FALSE(machine.canAnalyze());
+}
+
+TEST_CASE("baseline invalidated during a measurement ends in NoBaseline") {
+    AppStateMachine machine;
+    machine.onBridgeUp();
+    machine.onBaselineValid();
+    machine.onMeasureStarted();
+    machine.onBaselineInvalid();
+    CHECK_ENUM_EQ(machine.state(), AppState::Measuring);
+    machine.onMeasureFinished();
+    CHECK_ENUM_EQ(machine.state(), AppState::NoBaseline);
+
+    machine.onBaselineValid(); // the flag does not leak into the next run
+    machine.onMeasureStarted();
+    machine.onMeasureFinished();
+    CHECK_ENUM_EQ(machine.state(), AppState::Ready);
+}
+
+TEST_CASE("measure gate: one answer with a reason for every trigger") {
+    auto check = [](AppState state, BaselineStatus baseline, bool storageOk = true) {
+        const auto refusal = checkMeasure(state, baseline, storageOk);
+        return refusal ? static_cast<int>(*refusal) : -1;
+    };
+    const int allowed = -1;
+    CHECK(check(AppState::Ready, BaselineStatus::Fresh) == allowed);
+    CHECK(check(AppState::Ready, BaselineStatus::Aging) == allowed);
+    // Stale is refused even while the state still says Ready (no timer gap).
+    CHECK(check(AppState::Ready, BaselineStatus::Stale) == static_cast<int>(Refusal::baselineStale));
+    CHECK(check(AppState::Ready, BaselineStatus::None) == static_cast<int>(Refusal::noBaseline));
+    CHECK(check(AppState::NoBaseline, BaselineStatus::Stale) == static_cast<int>(Refusal::baselineStale));
+    CHECK(check(AppState::NoBaseline, BaselineStatus::None) == static_cast<int>(Refusal::noBaseline));
+    CHECK(check(AppState::Baselining, BaselineStatus::Fresh) == static_cast<int>(Refusal::baselineWizardOpen));
+    CHECK(check(AppState::Measuring, BaselineStatus::Fresh) == static_cast<int>(Refusal::busy));
+    CHECK(check(AppState::Analyzing, BaselineStatus::Fresh) == static_cast<int>(Refusal::busy));
+    CHECK(check(AppState::Fault, BaselineStatus::Fresh) == static_cast<int>(Refusal::fault));
+    CHECK(check(AppState::Starting, BaselineStatus::None) == static_cast<int>(Refusal::starting));
+    CHECK(check(AppState::Ready, BaselineStatus::Fresh, false) == static_cast<int>(Refusal::storageDown));
+    CHECK(std::string(operatorText(Refusal::baselineStale)) == "Baseline too old - redo the baseline");
+}
+
+TEST_CASE("sample ids become safe file name parts") {
+    CHECK(safeFileNamePart("W12-A_3") == "W12-A_3");
+    CHECK(safeFileNamePart("../etc/x") == "___etc_x");
+    CHECK(safeFileNamePart("A:B*?") == "A_B__");
+    CHECK(safeFileNamePart("") == "sample");
+    CHECK(safeFileNamePart(std::string(100, 'a')).size() == 40);
 }

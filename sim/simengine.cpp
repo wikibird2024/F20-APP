@@ -1,9 +1,10 @@
 #include "simengine.h"
 
 #include "f20/errors.h"
+#include "f20/jsonread.h"
 #include "spectrumsynth.h"
 
-#include <cmath>
+#include <charconv>
 #include <fstream>
 
 namespace f20sim {
@@ -19,6 +20,23 @@ namespace {
 
 Reply err(int id, ErrorCode code, const std::string& message) {
     return errorReply(id, f20::toString(code), message);
+}
+
+// One number of a spectrum CSV line. std::from_chars, not std::stod: a bad
+// line gives an error reply instead of an exception out of the server loop,
+// and the result does not depend on the C locale's decimal separator.
+std::optional<double> parseNumber(const std::string& text) {
+    std::size_t begin = text.find_first_not_of(" \t");
+    std::size_t end = text.find_last_not_of(" \t\r");
+    if (begin == std::string::npos)
+        return std::nullopt;
+    double value = 0.0;
+    const char* first = text.data() + begin;
+    const char* last = text.data() + end + 1;
+    const auto [stop, error] = std::from_chars(first, last, value);
+    if (error != std::errc() || stop != last)
+        return std::nullopt;
+    return value;
 }
 
 } // namespace
@@ -68,7 +86,7 @@ Reply SimEngine::handle(const Request& request) {
                                            {"guid", "sim-guid-0001"}}})}});
 
     if (cmd == "setRecipe") {
-        const std::string name = p.value("name", "");
+        const std::string name = f20::stringAt(p, "name").value_or("");
         bool known = false;
         for (const auto& r : config_.recipes)
             known = known || (r == name);
@@ -80,8 +98,8 @@ Reply SimEngine::handle(const Request& request) {
     }
 
     if (cmd == "setThicknessNm" || cmd == "setRoughnessNm") {
-        const int layer = p.value("layer", 0);
-        const double nm = p.value("nm", -1.0);
+        const int layer = f20::intAt(p, "layer").value_or(0);
+        const double nm = f20::numberAt(p, "nm").value_or(-1.0);
         if (layer < 1 || layer > 3 || nm < 0.0 || nm > 1e6)
             return err(id, ErrorCode::layerOutOfBounds,
                        "layer or value out of range");
@@ -91,7 +109,7 @@ Reply SimEngine::handle(const Request& request) {
     }
 
     if (cmd == "baselineSetRefMat") {
-        refMatSet_ = !p.value("name", "").empty();
+        refMatSet_ = !f20::stringAt(p, "name").value_or("").empty();
         if (!refMatSet_)
             return err(id, ErrorCode::filmeasureError,
                        "unknown reference material");
@@ -180,7 +198,9 @@ Reply SimEngine::handle(const Request& request) {
     if (cmd == "saveSpectrum") {
         if (!haveSpectrum_)
             return err(id, ErrorCode::filmeasureError, "no spectrum to save");
-        const std::string path = p.value("path", "");
+        const std::string path = f20::stringAt(p, "path").value_or("");
+        if (path.empty())
+            return err(id, ErrorCode::fileOpenFailed, "no path given");
         std::ofstream out(path);
         if (!out)
             return err(id, ErrorCode::fileOpenFailed, "cannot write " + path);
@@ -192,19 +212,27 @@ Reply SimEngine::handle(const Request& request) {
     }
 
     if (cmd == "openSpectrum") {
-        const std::string path = p.value("path", "");
+        const std::string path = f20::stringAt(p, "path").value_or("");
+        if (path.empty())
+            return err(id, ErrorCode::fileOpenFailed, "no path given");
         std::ifstream in(path);
         if (!in)
             return err(id, ErrorCode::fileOpenFailed, "cannot open " + path);
         f20::Spectrum s;
         std::string line;
         std::getline(in, line); // header
-        while (std::getline(in, line)) {
+        for (int lineNumber = 2; std::getline(in, line); ++lineNumber) {
             const auto comma = line.find(',');
             if (comma == std::string::npos)
                 continue;
-            s.wavelengthNm.push_back(std::stod(line.substr(0, comma)));
-            s.reflectance.push_back(std::stod(line.substr(comma + 1)));
+            const auto wavelengthNm = parseNumber(line.substr(0, comma));
+            const auto reflectance = parseNumber(line.substr(comma + 1));
+            if (!wavelengthNm || !reflectance)
+                return err(id, ErrorCode::fileOpenFailed,
+                           "bad number in line " + std::to_string(lineNumber) +
+                               " of " + path);
+            s.wavelengthNm.push_back(*wavelengthNm);
+            s.reflectance.push_back(*reflectance);
         }
         if (s.wavelengthNm.empty())
             return err(id, ErrorCode::fileOpenFailed, "no data in " + path);

@@ -28,3 +28,22 @@ TEST_CASE("spectrum with mismatched arrays is rejected") {
     json j{{"wavelengthNm", {400.0, 500.0}}, {"reflectance", {0.2}}};
     CHECK_FALSE(spectrumFromJson(j).has_value());
 }
+
+TEST_CASE("wrong types make a result malformed, never throw") {
+    CHECK_FALSE(measureResultFromJson(json::parse(
+        R"({"layers":[{"thicknessNm":"512"}],"gof":0.9,"passed":true})")).has_value());
+    CHECK_FALSE(measureResultFromJson(json::parse(
+        R"({"layers":[{"thicknessNm":512,"n":"1.4"}],"gof":0.9,"passed":true})")).has_value());
+    CHECK_FALSE(measureResultFromJson(json::parse(
+        R"({"layers":[{"thicknessNm":512,"layer":"1"}],"gof":0.9,"passed":true})")).has_value());
+    CHECK_FALSE(measureResultFromJson(json::parse(
+        R"({"layers":[5],"gof":0.9,"passed":true})")).has_value());
+    CHECK_FALSE(measureResultFromJson(json::parse(
+        R"({"layers":[],"gof":"0.9","passed":true})")).has_value());
+    CHECK_FALSE(measureResultFromJson(json::parse("[1]")).has_value());
+}
+
+TEST_CASE("a spectrum with a non-number element is rejected") {
+    json j{{"wavelengthNm", {400.0, nullptr}}, {"reflectance", {0.2, 0.3}}};
+    CHECK_FALSE(spectrumFromJson(j).has_value());
+}

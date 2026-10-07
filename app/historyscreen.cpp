@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QLineSeries>
 #include <QPushButton>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QSqlQueryModel>
 #include <QTableView>
@@ -18,6 +19,21 @@
 #include <QValueAxis>
 
 #include <cmath>
+
+namespace {
+
+// One CSV cell of operator text (RFC 4180): quoted when it holds a comma,
+// quote or line break. Text starting with = + - @ gets a leading ' so a
+// spreadsheet shows it instead of running it as a formula ("CSV injection").
+QString csvText(QString text) {
+    if (!text.isEmpty() && QStringLiteral("=+-@\t\r").contains(text.front()))
+        text.prepend('\'');
+    if (text.contains(',') || text.contains('"') || text.contains('\n') || text.contains('\r'))
+        text = '"' + text.replace("\"", "\"\"") + '"';
+    return text;
+}
+
+} // namespace
 
 HistoryScreen::HistoryScreen(Storage& storage, QWidget* parent)
     : QWidget(parent), storage_(storage) {
@@ -36,6 +52,9 @@ HistoryScreen::HistoryScreen(Storage& storage, QWidget* parent)
     topRow->addWidget(reanalyzeButton);
     topRow->addStretch();
     layout->addLayout(topRow);
+    statusLabel_ = new QLabel;
+    statusLabel_->setWordWrap(true);
+    layout->addWidget(statusLabel_);
 
     model_ = new QSqlQueryModel(this);
     table_ = new QTableView;
@@ -82,9 +101,18 @@ HistoryScreen::HistoryScreen(Storage& storage, QWidget* parent)
     });
 }
 
+void HistoryScreen::showStatus(const QString& text, bool isError) {
+    statusLabel_->setText(text);
+    statusLabel_->setStyleSheet(isError ? "color: #c62828;" : "color: #1a7f37;");
+}
+
 void HistoryScreen::refresh() {
+    // Times are stored in UTC ("...Z"); the operator reads local time.
+    // Rows from schema version 1 have local time without "Z" and are shown
+    // as they are.
     model_->setQuery(
-        "SELECT time, recipeName, operatorName, sampleId, layerNumber,"
+        "SELECT CASE WHEN time LIKE '%Z' THEN datetime(time, 'localtime')"
+        " ELSE time END AS time, recipeName, operatorName, sampleId, layerNumber,"
         " thicknessNm, gof, CASE passed WHEN 1 THEN 'PASS' ELSE 'FAIL' END"
         " AS verdict, reanalyzedFrom"
         " FROM measurements ORDER BY id DESC",
@@ -161,17 +189,31 @@ void HistoryScreen::exportCsv() {
     if (path.isEmpty())
         return;
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        showStatus("Cannot write " + path + ": " + file.errorString(), true);
         return;
+    }
     QTextStream out(&file);
     out << "time,recipe,operator,sample,layer,thicknessNm,gof,verdict\n";
     QSqlQuery query(
         "SELECT time, recipeName, operatorName, sampleId, layerNumber,"
         " thicknessNm, gof, passed FROM measurements ORDER BY id",
         storage_.database());
+    int rows = 0;
     while (query.next()) {
-        for (int c = 0; c < 7; ++c)
+        for (int c = 0; c < 4; ++c) // operator-typed text
+            out << csvText(query.value(c).toString()) << ',';
+        for (int c = 4; c < 7; ++c) // numbers
             out << query.value(c).toString() << ',';
         out << (query.value(7).toInt() ? "PASS" : "FAIL") << '\n';
+        ++rows;
+    }
+    out.flush();
+    if (query.lastError().isValid()) {
+        showStatus("Export incomplete - database error: " + query.lastError().text(), true);
+    } else if (out.status() != QTextStream::Ok || file.error() != QFileDevice::NoError) {
+        showStatus("Export incomplete - cannot write " + path + ": " + file.errorString(), true);
+    } else {
+        showStatus(QString("Exported %1 rows to %2").arg(rows).arg(path), false);
     }
 }

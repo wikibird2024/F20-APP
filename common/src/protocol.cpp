@@ -1,5 +1,7 @@
 #include "f20/protocol.h"
 
+#include "f20/jsonread.h"
+
 namespace f20 {
 namespace {
 
@@ -35,15 +37,18 @@ std::string serialize(const Event& event) {
 
 std::optional<Request> parseRequest(const std::string& line) {
     const auto j = tryParse(line);
-    if (!j || !j->contains("id") || !(*j)["id"].is_number_integer() ||
-        !j->contains("cmd") || !(*j)["cmd"].is_string())
+    if (!j)
+        return std::nullopt;
+    const auto id = intAt(*j, "id");
+    auto cmd = stringAt(*j, "cmd");
+    if (!id || !cmd)
         return std::nullopt;
 
     Request request;
-    request.id = (*j)["id"].get<int>();
-    request.cmd = (*j)["cmd"].get<std::string>();
-    if (j->contains("params") && (*j)["params"].is_object())
-        request.params = (*j)["params"];
+    request.id = *id;
+    request.cmd = std::move(*cmd);
+    if (const auto params = j->find("params"); params != j->end() && params->is_object())
+        request.params = *params;
     return request;
 }
 
@@ -52,31 +57,32 @@ Incoming parseIncoming(const std::string& line) {
     if (!j)
         return std::monostate{};
 
-    if (j->contains("event") && (*j)["event"].is_string()) {
+    if (auto name = stringAt(*j, "event")) {
         Event event;
-        event.event = (*j)["event"].get<std::string>();
-        if (j->contains("data") && (*j)["data"].is_object())
-            event.data = (*j)["data"];
+        event.event = std::move(*name);
+        if (const auto data = j->find("data"); data != j->end() && data->is_object())
+            event.data = *data;
         return event;
     }
 
-    if (j->contains("id") && (*j)["id"].is_number_integer() &&
-        j->contains("ok") && (*j)["ok"].is_boolean()) {
-        Reply reply;
-        reply.id = (*j)["id"].get<int>();
-        reply.ok = (*j)["ok"].get<bool>();
-        if (reply.ok) {
-            if (j->contains("result") && (*j)["result"].is_object())
-                reply.result = (*j)["result"];
-        } else if (j->contains("error") && (*j)["error"].is_object()) {
-            const json& e = (*j)["error"];
-            reply.errorCode = e.value("code", "");
-            reply.errorMessage = e.value("message", "");
-        }
-        return reply;
-    }
+    const auto id = intAt(*j, "id");
+    const auto ok = boolAt(*j, "ok");
+    if (!id || !ok)
+        return std::monostate{};
 
-    return std::monostate{};
+    Reply reply;
+    reply.id = *id;
+    reply.ok = *ok;
+    if (reply.ok) {
+        if (const auto result = j->find("result"); result != j->end() && result->is_object())
+            reply.result = *result;
+    } else if (const auto error = j->find("error"); error != j->end()) {
+        // A code or message of the wrong type is read as empty, not thrown:
+        // the reply is still an error and still answers its request.
+        reply.errorCode = stringAt(*error, "code").value_or("");
+        reply.errorMessage = stringAt(*error, "message").value_or("");
+    }
+    return reply;
 }
 
 Reply okReply(int id, json result) {

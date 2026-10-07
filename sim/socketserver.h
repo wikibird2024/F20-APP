@@ -7,7 +7,10 @@ namespace f20sim {
 
 // Blocking TCP server on 127.0.0.1:<port>, one client at a time
 // (spec §5.1 lifecycle). POSIX sockets; the Windows bridge will reuse the
-// same shape behind a winsock #ifdef in phase 6.
+// same shape behind a winsock #ifdef in phase 6 - including its rules: one
+// bad request gives an error reply and never stops the server, a client
+// that hangs up never kills it, and a line over the size cap closes only
+// that client.
 class SocketServer {
 public:
     explicit SocketServer(std::uint16_t port);
