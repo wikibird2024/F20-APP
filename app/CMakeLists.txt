@@ -10,10 +10,31 @@ qt_standard_project_setup()
 add_library(f20appqt STATIC
     bridgeclient.cpp
     storage.cpp
+    mqtttransport.h # interface only; listed so moc sees it
 )
 target_include_directories(f20appqt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(f20appqt PUBLIC Qt6::Network Qt6::Sql f20common)
 f20_warnings(f20appqt)
+
+# MQTT link to the server (spec §6.6) on Eclipse Paho MQTT C++. Optional:
+# without Paho, f20app still builds and only logs what it would send.
+option(F20_WITH_MQTT "Build the MQTT link to the server (needs Eclipse Paho MQTT C++)" ON)
+if(F20_WITH_MQTT)
+    find_package(PahoMqttCpp CONFIG QUIET)
+    if(PahoMqttCpp_FOUND)
+        target_sources(f20appqt PRIVATE pahomqtttransport.cpp)
+        # vcpkg may provide only the static library.
+        target_link_libraries(f20appqt PUBLIC
+            $<IF:$<TARGET_EXISTS:PahoMqttCpp::paho-mqttpp3>,PahoMqttCpp::paho-mqttpp3,PahoMqttCpp::paho-mqttpp3-static>)
+        target_compile_definitions(f20appqt PUBLIC F20_HAS_MQTT)
+        set(F20_HAS_MQTT ON PARENT_SCOPE) # tests/ adds the Paho tests
+        message(STATUS "MQTT: Eclipse Paho MQTT C++ ${PahoMqttCpp_VERSION}")
+    else()
+        message(WARNING "Eclipse Paho MQTT C++ not found - f20app builds without MQTT. "
+                        "Linux: sudo apt install libpaho-mqttpp-dev libpaho-mqtt-dev; "
+                        "Windows: vcpkg install paho-mqttpp3")
+    endif()
+endif()
 
 qt_add_executable(f20app
     main.cpp
@@ -24,6 +45,8 @@ qt_add_executable(f20app
     historyscreen.cpp
     diagnosticsscreen.cpp
 )
+# File name on disk is upper case; the CMake target name stays f20app.
+set_target_properties(f20app PROPERTIES OUTPUT_NAME "F20APP")
 target_link_libraries(f20app PRIVATE
     Qt6::Widgets Qt6::Charts
     f20appqt f20appcore

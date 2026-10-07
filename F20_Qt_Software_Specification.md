@@ -290,26 +290,82 @@ Rules (from the manual, cross-checked with the ASU SOP):
 
 The plant standardizes on MQTT over the LAN, so MQTT is the primary
 interface. `f20app` is an MQTT client; the broker (e.g. Mosquitto) runs on
-the Linux server. JSON payloads, nm units, QoS 1; MQTT 5 preferred so
-request/reply uses the native response topic + correlation data.
+the Linux server. It follows the **company command format**: two topics
+per machine and one JSON envelope. QoS 1; plant LAN only.
 
-| Topic | Direction (from f20app) | Carries |
+| Topic | Published by | Subscribed by |
 |---|---|---|
-| `f20/<serial>/online` | publish, retained, Last Will | `online`/`offline` — the broker flips it to `offline` itself when the NUC drops |
-| `f20/<serial>/status` | publish, retained | baseline state + age, busy, lamp warm-up state, versions |
-| `f20/<serial>/result` | publish, QoS 1 | every measurement result as it happens |
-| `f20/<serial>/alarm` | publish, QoS 1 | fail, baseline stale, signal low, fault |
-| `f20/<serial>/cmd/measure` | subscribe | `{recipeName?, sampleId?}` — set recipe if given, measure, store, reply with the result |
-| `f20/<serial>/cmd/baselineInvalidate` | subscribe | mark baseline stale (e.g. PLC knows the fiber moved) |
-| `f20/<serial>/cmd/getResults` | subscribe | `{since: <iso-time>}` — stored results, paged, in the reply |
-| `f20/<serial>/cmd/getSpectrum` | subscribe | `{resultId}` — the saved CSV spectrum in the reply |
+| `{SerialNumber}/ar/f20/send` | f20app | server |
+| `{SerialNumber}/ar/f20/receive` | server | f20app |
 
-- One reply per command on the requester's response topic (correlation
-  data); a refused `measure` (busy, baseline stale, wizard open) replies
-  with the §5.2 error model.
+`{SerialNumber}` is the F20 serial number. Topic names are confirmed with
+the server team (open item 14).
+
+Envelope (every message, both directions):
+
+```json
+{"command": "status", "command_type": "request", "data": {},
+ "machine_name": "F20", "machine_sn": "09A006",
+ "transaction_id": "4941-20240907-141649"}
+```
+
+| Field | Meaning |
+|---|---|
+| `command` | command name (table below) |
+| `command_type` | `request`, `response` or `ack` |
+| `data` | command data; `{}` if none |
+| `machine_name` | `F20` from f20app; `AR` from the server |
+| `machine_sn` | F20 serial number |
+| `transaction_id` | new for each request; copied into its response or ack. Format `NNNN-yyyyMMdd-HHmmss` |
+
+Rules:
+
+- If `status` stops, the server treats the F20 as offline.
+- Keys are snake_case; numbers are JSON numbers; thickness in nm; times in UTC.
+- On failure, `data.error` holds the code (§5.2) and `data.message` the
+  operator text; `error` is `""` on success.
+
+| Command | Direction | Answer |
+|---|---|---|
+| `status` | F20 → server, every 1 s | none |
+| `result` | F20 → server, after each measurement | ack |
+| `alarm` | F20 → server | ack |
+| `measure` | server → F20 | response: result or error |
+| `baseline_invalidate` | server → F20 | ack |
+| `get_results` | server → F20 | response, paged |
+| `get_spectrum` | server → F20 | response: spectrum as CSV |
+
+The company commands `setting` and `update` are not used: recipes live in
+FILMeasure, and software is installed manually.
+
+Data per command:
+
+- **status** — `machine_status` is a state from §7:
+  `{"software_version": "1.0.0", "bridge_version": "1.0.0",
+  "filmeasure_version": "6.1.0", "machine_status": "Ready",
+  "recipe_name": "SiO2 on Si", "baseline": {"valid": true, "age_minutes": 12},
+  "warm_up_left_minutes": 0, "processed_today": 50, "error": ""}`
+- **result** — also the data of a successful `measure` response; `n`, `k`
+  and `roughness_nm` appear only when the recipe solves them:
+  `{"result_id": "3f2a9c1e-…", "measured_at": "2026-10-07T08:15:30.120Z",
+  "recipe_name": "SiO2 on Si", "sample_id": "LOT42-07",
+  "operator_name": "op-01", "passed": true, "gof": 0.987,
+  "layers": [{"layer": 1, "thickness_nm": 512.3}],
+  "baseline_age_minutes": 12, "reanalyzed_from": "", "error": ""}`
+- **measure** — both fields optional; the measurement uses the recipe and
+  sample ID it carries: `{"recipe_name": "SiO2 on Si", "sample_id":
+  "LOT42-07"}`. A refusal: `{"error": "baselineStale", "message":
+  "Baseline too old - redo the baseline"}`.
+
+| Command | Request data | Answer data |
+|---|---|---|
+| `alarm` | `kind` (`fail`, `baseline_stale`, `signal_low`, `fault`), `message` | ack: `{}` |
+| `baseline_invalidate` | `reason`, e.g. `"fiber moved"` | ack: `error` |
+| `get_results` | `since` (UTC), `page` | `results`, `page`, `pages`, `error` |
+| `get_spectrum` | `result_id` | `result_id`, `csv`, `error` |
+
 - Broker host, credentials/TLS and MQTT version follow the plant standard —
-  confirm with IT (open item 10). Plant LAN only (trusted, per the
-  feasibility report).
+  confirm with IT (open item 10).
 - Spectra are kilobytes, so they fit in the reply payload; no file channel.
 - REST + WebSocket is the documented alternative (not the default); the
   internal design keeps the transport behind one interface.
@@ -346,7 +402,7 @@ One repository, one top-level CMake project, opened in Qt Creator 6:
 
 | Target | Language / toolchain | Arch | Notes |
 |---|---|---|---|
-| `f20app` | C++17, Qt 6, MSVC | x64 | Widgets/Quick, QtCharts, QtNetwork, QtMqtt (or Eclipse Paho C++), QtSql (SQLite) |
+| `f20app` | C++17, Qt 6, MSVC | x64 | Widgets/Quick, QtCharts, QtNetwork, QtSql (SQLite), Eclipse Paho MQTT C++ (EPL/EDL; Qt MQTT is GPLv3 or commercial only) |
 | `f20bridge` | C++/CLI, MSVC `/clr`, .NET Framework | match FILMeasure (corflags, §9) | references `FILMeasure.exe` as assembly; **no Qt** in this target; sockets + JSON in standard C++ (nlohmann/json); only `firemote_gateway.cpp` compiled `/clr` (§4) |
 | `f20bridge-sim` | C++17, plain | x64 | simulator speaking the same protocol with canned spectra → lets `f20app` be developed and tested without the instrument |
 
@@ -374,7 +430,8 @@ One repository, one top-level CMake project, opened in Qt Creator 6:
 | 7 | Real measure cycle time with our recipe | stopwatch in FIRemoteTest | auto-cycle rate, command timeouts |
 | 8 | Qt Creator + CMake builds the `/clr` target | try on the NUC | §8 fallback decision |
 | 9 | Our unit's spec configuration | config sheet / serial | which spec table applies (2011 manual: 15 nm–100 µm, 0.4 %/2 nm · 2025 datasheet: 15 nm–70 µm, 0.2 %/2 nm) |
-| 10 | Broker MQTT version (5 preferred) + QtMqtt availability in our Qt license | ask IT; check the Qt installer | request/reply design §6.6; QtMqtt vs Eclipse Paho C++ |
+| 10 | Broker host, MQTT version, credentials/TLS | ask IT | `[mqtt]` settings in `f20.ini` (library decided: Eclipse Paho MQTT C++) |
+| 14 | Company MQTT conventions for the F20 | agree with the server team | topic names and envelope details (§6.6) |
 
 ## 10. Acceptance tests (bench, with the F20 connected)
 

@@ -9,5 +9,9 @@ add_executable(f20apptests
 )
 set_target_properties(f20apptests PROPERTIES AUTOMOC ON)
 target_link_libraries(f20apptests PRIVATE Qt6::Test f20appqt)
+# Paho wrapper against the local broker (skipped when none is running).
+if(F20_HAS_MQTT)
+    target_sources(f20apptests PRIVATE test_pahomqtttransport.cpp)
+endif()
 f20_warnings(f20apptests)
 add_test(NAME f20apptests COMMAND f20apptests)

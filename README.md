@@ -13,8 +13,8 @@ Automation for the Filmetrics F20 thin-film analyzer: a Qt 6 operator app
 
 Run against the simulator (two terminals):
 
-    ./build/Debug/bin/f20bridge-sim
-    ./build/Debug/bin/f20app
+    ./build/Debug/bin/F20BRIDGE-SIM
+    ./build/Debug/bin/F20APP
 
 f20app reads `f20.ini` next to its executable (or `--config <file>`); the
 build copies `f20.ini` and `recipes/` there. Relative paths in the ini -
