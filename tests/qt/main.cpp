@@ -2,6 +2,7 @@
 
 int runBridgeClientTests(int argc, char** argv);
 int runStorageTests(int argc, char** argv);
+int runMqttServerLinkTests(int argc, char** argv);
 #ifdef F20_HAS_MQTT
 int runPahoMqttTransportTests(int argc, char** argv);
 #endif
@@ -13,6 +14,7 @@ int main(int argc, char** argv) {
     int failures = 0;
     failures += runBridgeClientTests(argc, argv);
     failures += runStorageTests(argc, argv);
+    failures += runMqttServerLinkTests(argc, argv);
 #ifdef F20_HAS_MQTT
     failures += runPahoMqttTransportTests(argc, argv);
 #endif

@@ -37,6 +37,8 @@ public:
 private:
     enum class Trigger { operatorButton, autoCycle, remote };
 
+    ServerLink* createServerLink();
+    void updateServerState();
     void loadRecipes();
     void startMeasurement(Trigger trigger);
     void failMeasurement(const QString& operatorMessage);
@@ -63,13 +65,14 @@ private:
     f20app::AppStateMachine state_;
     f20app::BaselineTracker baseline_;
     Storage storage_;
-    ServerLink* serverLink_;
+    ServerLink* serverLink_ = nullptr;
 
     MeasureScreen* measureScreen_;
     HistoryScreen* historyScreen_;
     DiagnosticsScreen* diagnosticsScreen_;
     QLabel* stateLabel_;
     QLabel* baselineLabel_;
+    QLabel* serverLabel_;
     QTimer autoCycleTimer_;
     QTimer ageTimer_;
     QString channelSerial_;

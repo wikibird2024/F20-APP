@@ -2,6 +2,21 @@
 
 #include <QtDebug>
 
+QString toString(ServerConnection state)
+{
+    switch (state) {
+        case ServerConnection::off:
+            return "off";
+        case ServerConnection::connecting:
+            return "connecting…";
+        case ServerConnection::connected:
+            return "connected";
+        case ServerConnection::lost:
+            return "lost, retrying";
+    }
+    return "unknown";
+}
+
 void NullServerLink::publishStatus(const f20::json &status)
 {
     qInfo().noquote() << "[server status]" << QString::fromStdString(status.dump());

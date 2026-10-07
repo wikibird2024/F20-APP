@@ -6,6 +6,7 @@ add_executable(f20apptests
     main.cpp
     test_bridgeclient.cpp
     test_storage.cpp
+    test_mqttserverlink.cpp
 )
 set_target_properties(f20apptests PROPERTIES AUTOMOC ON)
 target_link_libraries(f20apptests PRIVATE Qt6::Test f20appqt)

@@ -10,9 +10,16 @@ DiagnosticsScreen::DiagnosticsScreen(QWidget *parent) : QWidget(parent)
     auto *layout = new QVBoxLayout(this);
 
     bridgeState_ = new QLabel("bridge: unknown");
+    serverState_ = new QLabel("server: unknown");
+    serverDetails_ = new QLabel;
+    serverDetails_->setTextInteractionFlags(Qt::TextSelectableByMouse); // topics can be copied
+    serverDetails_->setWordWrap(true); // a long broker name must not be cut off
+    serverDetails_->setContentsMargins(24, 0, 0, 0); // indented under the server row
     versions_ = new QLabel("versions: -");
     signalHealth_ = new QLabel("signal: -");
     layout->addWidget(bridgeState_);
+    layout->addWidget(serverState_);
+    layout->addWidget(serverDetails_);
     layout->addWidget(versions_);
     layout->addWidget(signalHealth_);
 
@@ -37,6 +44,17 @@ void DiagnosticsScreen::setBridgeState(const QString &text, bool healthy)
 {
     bridgeState_->setText("bridge: " + text);
     bridgeState_->setStyleSheet(healthy ? "color: #1a7f37;" : "color: #c62828;");
+}
+
+void DiagnosticsScreen::setServerState(const QString &text, const QString &color)
+{
+    serverState_->setText("server: " + text);
+    serverState_->setStyleSheet("color: " + color + ";");
+}
+
+void DiagnosticsScreen::setServerDetails(const QString &text)
+{
+    serverDetails_->setText(text);
 }
 
 void DiagnosticsScreen::setVersions(const QString &text)

@@ -7,7 +7,12 @@
 #include "filenames.h"
 #include "historyscreen.h"
 #include "measurescreen.h"
+#include "mqttserverlink.h"
 #include "serverlink.h"
+
+#ifdef F20_HAS_MQTT
+#include "pahomqtttransport.h"
+#endif
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -38,6 +43,17 @@ f20app::BaselineTracker::Clock::time_point toTimePoint(const QDateTime& time) {
         std::chrono::milliseconds(time.toMSecsSinceEpoch())));
 }
 
+// Same colors as the baseline label.
+QString colorFor(ServerConnection state) {
+    switch (state) {
+    case ServerConnection::connected:  return "#1a7f37";
+    case ServerConnection::connecting: return "#b05000";
+    case ServerConnection::lost:       return "#c62828";
+    case ServerConnection::off:        break;
+    }
+    return "#6e7781";
+}
+
 QDateTime toDateTimeUtc(f20app::BaselineTracker::Clock::time_point time) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time.time_since_epoch());
     return QDateTime::fromMSecsSinceEpoch(ms.count(), Qt::UTC);
@@ -54,8 +70,6 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
 
     if (!QFileInfo::exists(configPath))
         qWarning().noquote() << "config file not found:" << configPath << "- using defaults";
-
-    serverLink_ = new NullServerLink(this); // MQTT impl replaces this (§6.6)
 
     baseline_.setThresholds(settings_.value("baseline/warnMinutes", 20).toInt(),
                             settings_.value("baseline/blockMinutes", 30).toInt());
@@ -87,11 +101,25 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     toolbar->addAction("Baseline...", this, &MainWindow::runBaselineWizard);
 
     stateLabel_ = new QLabel("starting");
+    serverLabel_ = new QLabel;
     baselineLabel_ = new QLabel("baseline: none");
     statusBar()->addWidget(stateLabel_);
+    statusBar()->addPermanentWidget(serverLabel_);
     statusBar()->addPermanentWidget(baselineLabel_);
 
     loadRecipes();
+
+    // Server link (spec §6.6). Wired before start(), so no log line or
+    // state change is missed.
+    serverLink_ = createServerLink();
+    connect(serverLink_, &ServerLink::connectionChanged, this, &MainWindow::updateServerState);
+    connect(serverLink_, &ServerLink::logLine, this, [this](const QString& line) {
+        diagnosticsScreen_->appendLog(line);
+        qInfo().noquote() << "[server]" << line;
+    });
+    diagnosticsScreen_->setServerDetails(serverLink_->connectionDetails());
+    updateServerState();
+    serverLink_->start();
 
     // State machine drives the UI and the server status (spec §7).
     state_.setChangeHandler([this](f20app::AppState, f20app::AppState to) {
@@ -185,6 +213,38 @@ MainWindow::~MainWindow() {
     bridge_.disconnect();
     autoCycleTimer_.disconnect();
     ageTimer_.disconnect();
+}
+
+// MQTT when f20.ini names a broker and the build has Paho; otherwise the
+// logging stand-in, and the app works exactly as without a server.
+ServerLink* MainWindow::createServerLink() {
+    const QString broker = settings_.value("mqtt/broker").toString().trimmed();
+    if (broker.isEmpty())
+        return new NullServerLink(this);
+#ifdef F20_HAS_MQTT
+    MqttServerLink::Settings link;
+    link.serial = settings_.value("device/serial").toString().trimmed();
+    if (link.serial.isEmpty())
+        qWarning().noquote() << "[device] serial is empty in f20.ini - MQTT topics will be wrong";
+    link.broker.host = broker;
+    link.broker.port = static_cast<quint16>(settings_.value("mqtt/port", 1883).toUInt());
+    link.broker.username = settings_.value("mqtt/username").toString();
+    link.broker.password = settings_.value("mqtt/password").toString();
+    link.broker.keepAliveSeconds =
+        settings_.value("mqtt/keepAliveSeconds", link.broker.keepAliveSeconds).toInt();
+    return new MqttServerLink(new PahoMqttTransport, link, this);
+#else
+    qWarning().noquote() << "f20.ini names an MQTT broker, but this build has no MQTT"
+                            " (Eclipse Paho not found) - server messages are only logged";
+    return new NullServerLink(this);
+#endif
+}
+
+void MainWindow::updateServerState() {
+    const ServerConnection state = serverLink_->connectionState();
+    serverLabel_->setText("server: " + toString(state));
+    serverLabel_->setStyleSheet("color: " + colorFor(state) + ";");
+    diagnosticsScreen_->setServerState(toString(state), colorFor(state));
 }
 
 bool MainWindow::bridgeConnected() const { return bridge_.isConnected(); }

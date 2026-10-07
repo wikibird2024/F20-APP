@@ -5,11 +5,13 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network Charts Sql)
 
 qt_standard_project_setup()
 
-# The bridge client and the storage in a library of their own, so the Qt
-# unit tests (tests/qt) can link them without the screens.
+# The bridge client, the storage and the server link in a library of their
+# own, so the Qt unit tests (tests/qt) can link them without the screens.
 add_library(f20appqt STATIC
     bridgeclient.cpp
     storage.cpp
+    serverlink.cpp
+    mqttserverlink.cpp
     mqtttransport.h # interface only; listed so moc sees it
 )
 target_include_directories(f20appqt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -39,7 +41,6 @@ endif()
 qt_add_executable(f20app
     main.cpp
     mainwindow.cpp
-    serverlink.cpp
     measurescreen.cpp
     baselinewizard.cpp
     historyscreen.cpp
