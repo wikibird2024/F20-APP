@@ -9,6 +9,7 @@ qt_standard_project_setup()
 # own, so the Qt unit tests (tests/qt) can link them without the screens.
 add_library(f20appqt STATIC
     bridgeclient.cpp
+    logretention.cpp
     storage.cpp
     serverlink.cpp
     mqttserverlink.cpp

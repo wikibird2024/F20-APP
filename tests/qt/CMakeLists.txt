@@ -6,6 +6,7 @@ add_executable(f20apptests
     main.cpp
     test_bridgeclient.cpp
     test_storage.cpp
+    test_logretention.cpp
     test_mqttserverlink.cpp
 )
 set_target_properties(f20apptests PROPERTIES AUTOMOC ON)

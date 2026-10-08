@@ -1,3 +1,4 @@
+#include "logretention.h"
 #include "mainwindow.h"
 
 #include <QApplication>
@@ -6,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMutex>
+#include <QSettings>
 #include <QTimer>
 
 #include <cstdio>
@@ -77,6 +79,21 @@ int main(int argc, char** argv) {
     qInstallMessageHandler(messageHandler);
     qInfo().noquote() << "f20app" << QCoreApplication::applicationVersion()
                       << "config:" << configPath;
+
+    // Old logs go at start and every 6 h - the app runs for weeks.
+    const int keepDays = QSettings(configPath, QSettings::IniFormat)
+                             .value("logs/keepDays", 30)
+                             .toInt();
+    const auto cleanLogs = [keepDays] {
+        const QStringList deleted = deleteOldLogs(g_log.dir, QDate::currentDate(), keepDays);
+        if (!deleted.isEmpty())
+            qInfo().noquote() << "[logs] deleted (older than" << keepDays
+                              << "days):" << deleted.join(", ");
+    };
+    cleanLogs();
+    QTimer logCleanup;
+    QObject::connect(&logCleanup, &QTimer::timeout, cleanLogs);
+    logCleanup.start(6 * 60 * 60 * 1000);
 
     int exitCode = 0;
     {
