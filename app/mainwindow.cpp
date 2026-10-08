@@ -23,6 +23,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QToolBar>
@@ -933,35 +934,34 @@ void MainWindow::applyRecipeLimits(const QString& recipe) {
     updateStatusBar();
 }
 
-// Spec 6.2: skipping the warm-up needs a reason, and the reason is logged.
-// Non-modal, like the wizard: the app keeps running behind it.
+// Skipping the warm-up takes one confirm click; the log records who
+// skipped it and how many minutes were left, so a drifting result can be
+// traced back to a cold lamp. Non-modal, like the wizard.
 void MainWindow::skipWarmUp() {
     if (warmUp_.isDone())
         return;
-    auto* dialog = new QInputDialog(this);
-    dialog->setWindowTitle("Skip lamp warm-up");
-    dialog->setLabelText(QString("The lamp needs %1 more min - a baseline with a cold lamp "
-                                 "drifts.\nReason for skipping (logged):")
-                             .arg(warmUp_.minutesLeft()));
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    connect(dialog, &QInputDialog::textValueSelected, this, [this](const QString& text) {
-        const QString reason = text.trimmed();
-        if (reason.isEmpty()) {
-            measureScreen_->showError("Warm-up not skipped: a reason is required");
-            return;
-        }
-        if (warmUp_.isDone())
+    auto* box = new QMessageBox(QMessageBox::Warning, "Skip lamp warm-up",
+                                QString("The lamp needs %1 more min.\n"
+                                        "A baseline with a cold lamp can drift.")
+                                    .arg(warmUp_.minutesLeft()),
+                                QMessageBox::NoButton, this);
+    QPushButton* skip = box->addButton("Skip", QMessageBox::AcceptRole);
+    box->addButton(QMessageBox::No);
+    box->setDefaultButton(QMessageBox::No); // Enter does not skip by accident
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    connect(box, &QDialog::finished, this, [this, box, skip] {
+        if (box->clickedButton() != skip || warmUp_.isDone())
             return;
         const int minutesLeft = warmUp_.minutesLeft();
         warmUp_.skip();
         const QString who = measureScreen_->operatorName().trimmed();
-        logEvent(QString("[warm-up] skipped with %1 min left by %2: %3")
+        logEvent(QString("[warm-up] skipped with %1 min left by %2")
                      .arg(minutesLeft)
-                     .arg(who.isEmpty() ? QString("(no operator name)") : who, reason));
+                     .arg(who.isEmpty() ? QString("(no operator name)") : who));
         updateWarmUp();
         updateStatusBar();
     });
-    dialog->open();
+    box->open();
 }
 
 // Notes the moment the lamp counts as warm. A recipe that needs a longer
