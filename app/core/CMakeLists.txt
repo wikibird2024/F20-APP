@@ -6,6 +6,7 @@ add_library(f20appcore STATIC
     devicecheck.cpp
     filenames.cpp
     measuregate.cpp
+    recipelimits.cpp
 )
 target_include_directories(f20appcore PUBLIC .)
 f20_warnings(f20appcore)

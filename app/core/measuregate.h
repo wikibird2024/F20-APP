@@ -23,6 +23,16 @@ enum class Refusal {
 
 std::optional<Refusal> checkMeasure(AppState state, BaselineStatus baseline, bool storageOk);
 
+// What the baseline's age means for the state right now. The limits change
+// with the recipe, so a stale baseline can be valid again: switching from a
+// thin-film to a thick-film recipe must bring Ready back.
+//   nowStale: Ready, but the age is past the block limit
+//   nowValid: NoBaseline, but the tracker holds a commit within the limits.
+//             Safe because every other way into NoBaseline (bridge drop,
+//             wizard cancel, "Baseline invalid") also clears the tracker.
+enum class BaselineChange { none, nowStale, nowValid };
+BaselineChange baselineChange(AppState state, BaselineStatus baseline);
+
 const char* toString(Refusal refusal);     // machine name, for server replies
 const char* operatorText(Refusal refusal); // the sentence shown on screen
 

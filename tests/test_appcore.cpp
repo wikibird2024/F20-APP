@@ -4,6 +4,7 @@
 #include "devicecheck.h"
 #include "filenames.h"
 #include "measuregate.h"
+#include "recipelimits.h"
 
 using namespace f20app;
 using namespace std::chrono_literals;
@@ -213,4 +214,42 @@ TEST_CASE("channel serial: same F20 despite case and spaces; another F20 is caug
     CHECK_ENUM_EQ(checkChannelSerial("", "F20:09A006"), SerialCheck::notConfigured);
     CHECK_ENUM_EQ(checkChannelSerial("  ", "F20:09A006"), SerialCheck::notConfigured);
     CHECK_ENUM_EQ(checkChannelSerial("F20:09A006", ""), SerialCheck::missing);
+}
+
+TEST_CASE("recipe limits: profile by recipe name, defaults otherwise") {
+    RecipeLimits limits(BaselineLimits{20, 30, 15});
+    limits.addProfile({"thick", {"SiN thick", "Oxide\\Thick 2um"}, {240, 480, 5}});
+    limits.addProfile({"other", {"sin THICK"}, {1, 2, 0}});
+
+    CHECK(limits.forRecipe("SiN thick").blockMinutes == 480);
+    CHECK(limits.forRecipe("sin thick").warmUpMinutes == 5); // case-insensitive
+    CHECK(limits.forRecipe("Oxide\\Thick 2um").warnMinutes == 240);
+    CHECK(limits.profileFor("SiN thick") == "thick");          // first profile wins
+    CHECK(limits.forRecipe("SiO2 on Si").blockMinutes == 30);
+    CHECK(limits.profileFor("SiO2 on Si") == "default");
+    CHECK(limits.recipesInSeveralProfiles() == std::vector<std::string>{"SiN thick"});
+}
+
+TEST_CASE("recipe limits: unusable values are named") {
+    CHECK_FALSE(checkLimits({20, 30, 15}).has_value());
+    CHECK_FALSE(checkLimits({30, 30, 0}).has_value());
+    CHECK(checkLimits({0, 30, 15}).has_value());
+    CHECK(checkLimits({40, 30, 15}).has_value());
+    CHECK(checkLimits({20, 30, -1}).has_value());
+}
+
+TEST_CASE("baseline change: stale leaves Ready, valid again returns to Ready") {
+    using S = BaselineStatus;
+    CHECK_ENUM_EQ(baselineChange(AppState::Ready, S::Stale), BaselineChange::nowStale);
+    CHECK_ENUM_EQ(baselineChange(AppState::Ready, S::Fresh), BaselineChange::none);
+    CHECK_ENUM_EQ(baselineChange(AppState::NoBaseline, S::Fresh), BaselineChange::nowValid);
+    CHECK_ENUM_EQ(baselineChange(AppState::NoBaseline, S::Aging), BaselineChange::nowValid);
+    CHECK_ENUM_EQ(baselineChange(AppState::NoBaseline, S::None), BaselineChange::none);
+    CHECK_ENUM_EQ(baselineChange(AppState::NoBaseline, S::Stale), BaselineChange::none);
+    // Busy or broken states are left alone; the change applies when they end.
+    for (AppState state : {AppState::Starting, AppState::Baselining, AppState::Measuring,
+                           AppState::Analyzing, AppState::Fault}) {
+        CHECK_ENUM_EQ(baselineChange(state, S::Stale), BaselineChange::none);
+        CHECK_ENUM_EQ(baselineChange(state, S::Fresh), BaselineChange::none);
+    }
 }

@@ -30,6 +30,15 @@ std::optional<Refusal> checkMeasure(AppState state, BaselineStatus baseline, boo
     return std::nullopt;
 }
 
+BaselineChange baselineChange(AppState state, BaselineStatus baseline) {
+    if (state == AppState::Ready && baseline == BaselineStatus::Stale)
+        return BaselineChange::nowStale;
+    if (state == AppState::NoBaseline &&
+        (baseline == BaselineStatus::Fresh || baseline == BaselineStatus::Aging))
+        return BaselineChange::nowValid;
+    return BaselineChange::none;
+}
+
 const char* toString(Refusal refusal) {
     switch (refusal) {
     case Refusal::storageDown:        return "storageDown";
