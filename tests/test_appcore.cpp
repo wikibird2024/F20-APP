@@ -5,6 +5,7 @@
 #include "filenames.h"
 #include "measuregate.h"
 #include "recipelimits.h"
+#include "warmup.h"
 
 using namespace f20app;
 using namespace std::chrono_literals;
@@ -252,4 +253,39 @@ TEST_CASE("baseline change: stale leaves Ready, valid again returns to Ready") {
         CHECK_ENUM_EQ(baselineChange(state, S::Stale), BaselineChange::none);
         CHECK_ENUM_EQ(baselineChange(state, S::Fresh), BaselineChange::none);
     }
+}
+
+TEST_CASE("lamp warm-up: counts down in whole minutes, rounded up") {
+    const auto t0 = WarmUpTimer::Clock::now();
+    WarmUpTimer warmUp;
+    warmUp.setRequiredMinutes(15);
+    warmUp.start(t0);
+    CHECK(warmUp.minutesLeft(t0) == 15);
+    CHECK_FALSE(warmUp.isDone(t0));
+    CHECK(warmUp.minutesLeft(t0 + 14min + 1s) == 1);
+    CHECK(warmUp.minutesLeft(t0 + 15min) == 0);
+    CHECK(warmUp.isDone(t0 + 15min));
+}
+
+TEST_CASE("lamp warm-up: recipe change, skip, never started, clock set back") {
+    const auto t0 = WarmUpTimer::Clock::now();
+    WarmUpTimer warmUp;
+    CHECK_FALSE(warmUp.isDone(t0)); // not started: not warm
+
+    warmUp.start(t0);
+    warmUp.setRequiredMinutes(5);
+    CHECK(warmUp.isDone(t0 + 6min));
+    warmUp.setRequiredMinutes(15); // thin-film recipe picked after 6 min
+    CHECK(warmUp.minutesLeft(t0 + 6min) == 9);
+
+    CHECK(warmUp.minutesLeft(t0 - 1h) == 15); // clock set back: full time
+
+    warmUp.skip();
+    CHECK(warmUp.isSkipped());
+    CHECK(warmUp.isDone(t0));
+    warmUp.start(t0); // a new power-on forgets the skip
+    CHECK_FALSE(warmUp.isDone(t0));
+
+    warmUp.setRequiredMinutes(0);
+    CHECK(warmUp.isDone(t0));
 }
