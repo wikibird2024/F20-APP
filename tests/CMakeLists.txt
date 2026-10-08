@@ -3,6 +3,7 @@ add_executable(f20tests
     main.cpp
     test_framing.cpp
     test_protocol.cpp
+    test_envelope.cpp
     test_errors.cpp
     test_results.cpp
     test_simengine.cpp

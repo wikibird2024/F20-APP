@@ -2,6 +2,7 @@
 # NO Qt in this library — the Windows bridge links it and must stay Qt-free.
 add_library(f20common STATIC
     src/framing.cpp
+    src/envelope.cpp
     src/errors.cpp
     src/jsonread.cpp
     src/logtext.cpp
