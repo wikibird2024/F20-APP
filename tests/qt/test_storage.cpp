@@ -135,6 +135,36 @@ private slots:
         QVERIFY(storage.insertMeasurement(twoLayers(80.0), minimalRecord()).has_value());
     }
 
+    void resultsSinceGroupsLayersAndPages() {
+        QTemporaryDir dir;
+        Storage storage;
+        QVERIFY(storage.open(dir.filePath("f20.db")));
+        const QDateTime before = QDateTime::currentDateTimeUtc().addSecs(-1);
+        MeasurementRecord record = minimalRecord();
+        record.sampleId = "LOT1";
+        record.spectrumFile = "spectra/a.csv";
+        const auto first = storage.insertMeasurement(twoLayers(80.0), record);
+        record.spectrumFile.clear();
+        QVERIFY(first && storage.insertMeasurement(twoLayers(81.0), record));
+        QVERIFY(storage.insertMeasurement(twoLayers(82.0), record));
+
+        const ResultPage all = storage.resultsSince(QDateTime(), 0, 10);
+        QCOMPARE(all.total, 3);
+        QCOMPARE(int(all.results.size()), 3);
+        QCOMPARE(int(all.results[0].result.layers.size()), 2); // layers grouped
+        QCOMPARE(all.results[0].sampleId, QString("LOT1"));
+        QVERIFY(all.results[0].result.passed);
+
+        const ResultPage secondPage = storage.resultsSince(before, 2, 2);
+        QCOMPARE(secondPage.total, 3);
+        QCOMPARE(int(secondPage.results.size()), 1);
+        QCOMPARE(storage.resultsSince(QDateTime::currentDateTimeUtc().addSecs(3600), 0, 10).total, 0);
+
+        QCOMPARE(storage.countResultsSince(before), 3);
+        QCOMPARE(storage.spectrumFileForResult(*first), std::optional<QString>("spectra/a.csv"));
+        QVERIFY(!storage.spectrumFileForResult("no-such-id").has_value());
+    }
+
     void baselineHistoryGivesTheAgeBackUntilInvalidated() {
         QTemporaryDir dir;
         Storage storage;

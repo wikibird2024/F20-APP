@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <optional>
+#include <vector>
 
 // What the database keeps beside the layer values of one result, so a row
 // can be explained later without asking anyone: which baseline it used,
@@ -21,6 +22,24 @@ struct MeasurementRecord {
     std::optional<QDateTime> baselineCommittedAtUtc; // empty for a re-analysis
     QString appVersion;
     QString bridgeVersion;
+};
+
+// One stored result with its layers, as get_results sends it (spec 8.2.5.4).
+struct StoredResult {
+    QString resultId;
+    QString timeUtc; // as stored: 2026-10-07T08:15:30.120Z
+    QString recipeName;
+    QString sampleId;
+    QString operatorName;
+    QString spectrumFile;
+    QString reanalyzedFrom;
+    std::optional<int> baselineAgeMinutes;
+    f20::MeasureResult result; // layers, gof, passed (no summary)
+};
+
+struct ResultPage {
+    std::vector<StoredResult> results;
+    int total = 0; // results matching, over all pages
 };
 
 // SQLite storage, one row per measured layer (spec §6.5), plus the history
@@ -47,6 +66,15 @@ public:
     bool invalidateBaselines(const QString& channelSerial, const QDateTime& atUtc);
     // Commit time of the channel's newest baseline, unless it was invalidated.
     std::optional<QDateTime> lastValidBaseline(const QString& channelSerial);
+
+    // Results measured at or after sinceUtc (all of them when it is
+    // invalid), oldest first; `limit` results from `offset`. Rows from
+    // schema 1 have no result id: each row counts as its own result.
+    ResultPage resultsSince(const QDateTime& sinceUtc, int offset, int limit);
+    // How many results were measured at or after sinceUtc.
+    int countResultsSince(const QDateTime& sinceUtc);
+    // nullopt: no such result; "" : the result has no saved spectrum.
+    std::optional<QString> spectrumFileForResult(const QString& resultId);
 
     // Sample id of the measurement that saved this spectrum file.
     std::optional<QString> sampleIdForSpectrum(const QString& spectrumFile);

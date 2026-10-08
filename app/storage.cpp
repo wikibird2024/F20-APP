@@ -246,3 +246,105 @@ std::optional<QString> Storage::sampleIdForSpectrum(const QString &spectrumFile)
         return std::nullopt;
     return query.value(0).toString();
 }
+
+namespace
+{
+// One result = all rows sharing a result id; a schema-1 row has none and
+// stands alone.
+const char *const kResultKey = "COALESCE(resultId, 'row-' || id)";
+
+QString sinceText(const QDateTime &sinceUtc)
+{
+    return sinceUtc.isValid() ? isoUtc(sinceUtc) : QString(""); // "" sorts before every time
+}
+} // namespace
+
+ResultPage Storage::resultsSince(const QDateTime &sinceUtc, int offset, int limit)
+{
+    ResultPage page;
+    if (!isOpen_)
+        return page;
+    const QString since = sinceText(sinceUtc);
+
+    QSqlQuery count(db_);
+    count.prepare(QString("SELECT COUNT(DISTINCT %1) FROM measurements WHERE time >= ?").arg(kResultKey));
+    count.addBindValue(since);
+    if (count.exec() && count.next())
+        page.total = count.value(0).toInt();
+
+    QSqlQuery keys(db_);
+    keys.prepare(QString("SELECT %1 AS resultKey, MIN(time) AS firstTime FROM measurements"
+                         " WHERE time >= ? GROUP BY resultKey ORDER BY firstTime, resultKey"
+                         " LIMIT ? OFFSET ?")
+                     .arg(kResultKey));
+    keys.addBindValue(since);
+    keys.addBindValue(limit);
+    keys.addBindValue(offset);
+    if (!keys.exec()) {
+        fail("result query failed: " + keys.lastError().text());
+        return page;
+    }
+    QStringList resultKeys;
+    while (keys.next())
+        resultKeys << keys.value(0).toString();
+
+    for (const QString &key : resultKeys) {
+        QSqlQuery rows(db_);
+        rows.prepare(QString("SELECT time, recipeName, sampleId, operatorName, layerNumber, thicknessNm,"
+                             " n, k, roughnessNm, gof, passed, spectrumFile, reanalyzedFrom,"
+                             " baselineAgeMinutes FROM measurements WHERE %1 = ? ORDER BY layerNumber")
+                         .arg(kResultKey));
+        rows.addBindValue(key);
+        if (!rows.exec())
+            continue;
+        StoredResult stored;
+        stored.resultId = key;
+        while (rows.next()) {
+            if (stored.result.layers.empty()) {
+                stored.timeUtc = rows.value(0).toString();
+                stored.recipeName = rows.value(1).toString();
+                stored.sampleId = rows.value(2).toString();
+                stored.operatorName = rows.value(3).toString();
+                stored.result.gof = rows.value(9).toDouble();
+                stored.result.passed = rows.value(10).toInt() != 0;
+                stored.spectrumFile = rows.value(11).toString();
+                stored.reanalyzedFrom = rows.value(12).toString();
+                if (!rows.value(13).isNull())
+                    stored.baselineAgeMinutes = rows.value(13).toInt();
+            }
+            f20::LayerResult layer;
+            layer.layer = rows.value(4).toInt();
+            layer.thicknessNm = rows.value(5).toDouble();
+            if (!rows.value(6).isNull())
+                layer.n = rows.value(6).toDouble();
+            if (!rows.value(7).isNull())
+                layer.k = rows.value(7).toDouble();
+            if (!rows.value(8).isNull())
+                layer.roughnessNm = rows.value(8).toDouble();
+            stored.result.layers.push_back(layer);
+        }
+        if (!stored.result.layers.empty())
+            page.results.push_back(std::move(stored));
+    }
+    return page;
+}
+
+int Storage::countResultsSince(const QDateTime &sinceUtc)
+{
+    if (!isOpen_)
+        return 0;
+    QSqlQuery query(db_);
+    query.prepare(QString("SELECT COUNT(DISTINCT %1) FROM measurements WHERE time >= ?").arg(kResultKey));
+    query.addBindValue(sinceText(sinceUtc));
+    return query.exec() && query.next() ? query.value(0).toInt() : 0;
+}
+
+std::optional<QString> Storage::spectrumFileForResult(const QString &resultId)
+{
+    QSqlQuery query(db_);
+    query.prepare("SELECT spectrumFile FROM measurements WHERE resultId = ? LIMIT 1");
+    query.addBindValue(resultId);
+    if (!query.exec() || !query.next())
+        return std::nullopt;
+    return query.value(0).toString();
+}
