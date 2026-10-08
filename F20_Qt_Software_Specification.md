@@ -293,6 +293,8 @@ interface. `f20app` is an MQTT client; the broker (e.g. Mosquitto) runs on
 the Linux server. It follows the **company command format**: two topics
 per machine and one JSON envelope. QoS 1; plant LAN only.
 
+#### 6.6.1 Topics
+
 | Topic | Published by | Subscribed by |
 |---|---|---|
 | `{SerialNumber}/ar/f20/send` | f20app | server |
@@ -301,7 +303,9 @@ per machine and one JSON envelope. QoS 1; plant LAN only.
 `{SerialNumber}` is the F20 serial number. Topic names are confirmed with
 the server team (open item 14).
 
-Envelope (every message, both directions):
+#### 6.6.2 General structure of command
+
+Every message, both directions:
 
 ```json
 {"command": "status", "command_type": "request", "data": {},
@@ -309,64 +313,226 @@ Envelope (every message, both directions):
  "transaction_id": "4941-20240907-141649"}
 ```
 
-| Field | Meaning |
-|---|---|
-| `command` | command name (table below) |
-| `command_type` | `request`, `response` or `ack` |
-| `data` | command data; `{}` if none |
-| `machine_name` | `F20` from f20app; `AR` from the server |
-| `machine_sn` | F20 serial number |
-| `transaction_id` | new for each request; copied into its response or ack. Format `NNNN-yyyyMMdd-HHmmss` |
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `command` | Command name (6.6.4) | String, snake_case | `status` |
+| 2 | `command_type` | Kind of message | Enum: `request` / `response` / `ack` | `request` |
+| 3 | `data` | Command data; `{}` if none | Object | `{}` |
+| 4 | `machine_name` | Sender: `F20` from f20app, `AR` from the server | String | `F20` |
+| 5 | `machine_sn` | F20 serial number, without the `F20:` prefix | String | `09A006` |
+| 6 | `transaction_id` | New for each request; copied into its response or ack | String `NNNN-yyyyMMdd-HHmmss` (first part: open item 14) | `4941-20240907-141649` |
 
-Rules:
+#### 6.6.3 Rules
 
-- If `status` stops, the server treats the F20 as offline.
-- Keys are snake_case; numbers are JSON numbers; thickness in nm; times in UTC.
-- On failure, `data.error` holds the code (§5.2) and `data.message` the
-  operator text; `error` is `""` on success.
+- `measure`, `get_results` and `get_spectrum` get a response; `result`,
+  `alarm` and `baseline_invalidate` get an ack; `status` gets no answer.
+- Keys are snake_case. Codes and states are camelCase words, as in §5.2 and §7.
+- Numbers are JSON numbers, never strings. A number with a unit carries it
+  in its key (`thickness_nm`, `age_minutes`).
+- Times are UTC strings `yyyy-MM-ddTHH:mm:ss.zzzZ`, e.g.
+  `2026-10-07T08:15:30.120Z`.
+- An optional field is left out when it has no value; it is never `null`.
+- On failure, `data.error` holds the code and `data.message` the operator
+  text; `error` is `""` on success.
+- Offline: no `status` for 5 s, or the broker's Last Will (a `status` with
+  `machine_status` `offline`, sent when f20app drops off the broker).
 
-| Command | Direction | Answer |
-|---|---|---|
-| `status` | F20 → server, every 1 s | none |
-| `result` | F20 → server, after each measurement | ack |
-| `alarm` | F20 → server | ack |
-| `measure` | server → F20 | response: result or error |
-| `baseline_invalidate` | server → F20 | ack |
-| `get_results` | server → F20 | response, paged |
-| `get_spectrum` | server → F20 | response: spectrum as CSV |
+#### 6.6.4 Command list
+
+| No. | Command | Direction | Answer |
+|---|---|---|---|
+| 1 | `status` | F20 → server, every 1 s | none |
+| 2 | `result` | F20 → server, after each measurement | ack |
+| 3 | `alarm` | F20 → server | ack |
+| 4 | `measure` | server → F20 | response: result or error |
+| 5 | `baseline_invalidate` | server → F20 | ack |
+| 6 | `get_results` | server → F20 | response, paged |
+| 7 | `get_spectrum` | server → F20 | response: spectrum as CSV |
 
 The company commands `setting` and `update` are not used: recipes live in
 FILMeasure, and software is installed manually.
 
-Data per command:
+#### 6.6.5 Detail data of command
 
-- **status** — `machine_status` is a state from §7:
-  `{"software_version": "1.0.0", "bridge_version": "1.0.0",
-  "filmeasure_version": "6.1.0", "machine_status": "Ready",
-  "recipe_name": "SiO2 on Si", "baseline": {"valid": true, "age_minutes": 12},
-  "warm_up_left_minutes": 0, "processed_today": 50, "error": ""}`
-- **result** — also the data of a successful `measure` response; `n`, `k`
-  and `roughness_nm` appear only when the recipe solves them:
-  `{"result_id": "3f2a9c1e-…", "measured_at": "2026-10-07T08:15:30.120Z",
-  "recipe_name": "SiO2 on Si", "sample_id": "LOT42-07",
-  "operator_name": "op-01", "passed": true, "gof": 0.987,
-  "layers": [{"layer": 1, "thickness_nm": 512.3}],
-  "baseline_age_minutes": 12, "reanalyzed_from": "", "error": ""}`
-- **measure** — both fields optional; the measurement uses the recipe and
-  sample ID it carries: `{"recipe_name": "SiO2 on Si", "sample_id":
-  "LOT42-07"}`. A refusal: `{"error": "baselineStale", "message":
-  "Baseline too old - redo the baseline"}`.
+##### 6.6.5.1 STATUS (F20 → server)
 
-| Command | Request data | Answer data |
-|---|---|---|
-| `alarm` | `kind` (`fail`, `baseline_stale`, `signal_low`, `fault`), `message` | ack: `{}` |
-| `baseline_invalidate` | `reason`, e.g. `"fiber moved"` | ack: `error` |
-| `get_results` | `since` (UTC), `page` | `results`, `page`, `pages`, `error` |
-| `get_spectrum` | `result_id` | `result_id`, `csv`, `error` |
+Sent every 1 s; no answer.
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `software_version` | f20app version | String | `1.0.0` |
+| 2 | `bridge_version` | f20bridge version | String | `1.0.0` |
+| 3 | `filmeasure_version` | FILMeasure version | String | `6.1.0` |
+| 4 | `machine_status` | f20app state (§7); `offline` only in the Last Will | Enum: `starting` / `noBaseline` / `baselining` / `ready` / `measuring` / `analyzing` / `fault` / `offline` | `ready` |
+| 5 | `recipe_name` | Recipe selected in f20app | String | `SiO2 on Si` |
+| 6 | `baseline` | Baseline in use | Object | |
+| 7 | `baseline.valid` | `true` when a committed baseline exists and is not invalidated | Boolean | `true` |
+| 8 | `baseline.age_minutes` | Minutes since the last baseline commit; 0 if none | Integer | `12` |
+| 9 | `warm_up_left_minutes` | Lamp warm-up time left; 0 when done | Integer | `0` |
+| 10 | `processed_today` | Results stored since midnight, NUC local time | Integer | `50` |
+| 11 | `error` | Code of the current fault (§5.2); `""` when none | String | `""` |
+
+```json
+{"software_version": "1.0.0", "bridge_version": "1.0.0",
+ "filmeasure_version": "6.1.0", "machine_status": "ready",
+ "recipe_name": "SiO2 on Si", "baseline": {"valid": true, "age_minutes": 12},
+ "warm_up_left_minutes": 0, "processed_today": 50, "error": ""}
+```
+
+##### 6.6.5.2 RESULT (F20 → server)
+
+Sent after each measurement; the server acks it. The same data is the
+answer to a successful `measure`.
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `result_id` | ID of the stored result | String, UUID | `3f2a9c1e-…` |
+| 2 | `measured_at` | Time of the measurement | String, UTC time (6.6.3) | `2026-10-07T08:15:30.120Z` |
+| 3 | `recipe_name` | Recipe used | String | `SiO2 on Si` |
+| 4 | `sample_id` | Sample ID from the operator or the server; `""` if none | String | `LOT42-07` |
+| 5 | `operator_name` | Operator entered on the measure screen; `""` if none | String | `op-01` |
+| 6 | `passed` | Verdict from the recipe limits (§6.1) | Boolean | `true` |
+| 7 | `gof` | Goodness of fit | Number, 0–1 | `0.987` |
+| 8 | `layers` | One entry per recipe layer | Array of Object | |
+| 9 | `layers[].layer` | Layer number as in the recipe | Integer, from 1 | `1` |
+| 10 | `layers[].thickness_nm` | Thickness | Number, nm | `512.3` |
+| 11 | `layers[].n` | Refractive index; only when the recipe solves it | Number, optional | `1.46` |
+| 12 | `layers[].k` | Extinction coefficient; only when the recipe solves it | Number, optional | `0` |
+| 13 | `layers[].roughness_nm` | Roughness; only when the recipe solves it | Number, nm, optional | `2.1` |
+| 14 | `baseline_age_minutes` | Age of the baseline used | Integer | `12` |
+| 15 | `reanalyzed_from` | `result_id` of the original when re-analyzed; `""` otherwise | String | `""` |
+| 16 | `error` | `""` on success | String | `""` |
+
+```json
+{"result_id": "3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90",
+ "measured_at": "2026-10-07T08:15:30.120Z", "recipe_name": "SiO2 on Si",
+ "sample_id": "LOT42-07", "operator_name": "op-01", "passed": true,
+ "gof": 0.987, "layers": [{"layer": 1, "thickness_nm": 512.3}],
+ "baseline_age_minutes": 12, "reanalyzed_from": "", "error": ""}
+```
+
+##### 6.6.5.3 MEASURE (server → F20)
+
+The server asks for one measurement now. The answer is a response: the
+RESULT data (6.6.5.2), or a refusal.
+
+Request data:
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `recipe_name` | Recipe to use; the current recipe when left out | String, optional | `SiO2 on Si` |
+| 2 | `sample_id` | Sample ID stored with the result | String, optional | `LOT42-07` |
+
+Refusal data:
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `error` | Why the measurement did not run | Enum: `storageDown` / `fault` / `starting` / `baselineWizardOpen` / `busy` / `noBaseline` / `baselineStale`, or a §5.2 code (e.g. `recipeNotFound`) | `baselineStale` |
+| 2 | `message` | Operator text for the code | String | `Baseline too old - redo the baseline` |
+
+```json
+→ {"command": "measure", "command_type": "request",
+   "data": {"recipe_name": "SiO2 on Si", "sample_id": "LOT42-07"},
+   "machine_name": "AR", "machine_sn": "09A006",
+   "transaction_id": "4941-20261007-081529"}
+← {"command": "measure", "command_type": "response",
+   "data": {"error": "baselineStale", "message": "Baseline too old - redo the baseline"},
+   "machine_name": "F20", "machine_sn": "09A006",
+   "transaction_id": "4941-20261007-081529"}
+```
+
+##### 6.6.5.4 ALARM (F20 → server)
+
+Sent when something needs a person; the server acks with `{}`.
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `kind` | What happened | Enum: `fail` / `baselineStale` / `signalLow` / `bridgeFault` / `storageFailed` | `baselineStale` |
+| 2 | `message` | Short text for the server dashboard | String | `Baseline too old - redo the baseline` |
+| 3 | `result_id` | The failed result; only for `fail` | String, optional | `3f2a9c1e-…` |
+
+```json
+{"kind": "baselineStale", "message": "Baseline too old - redo the baseline"}
+```
+
+##### 6.6.5.5 BASELINE_INVALIDATE (server → F20)
+
+The server marks the baseline invalid; f20app moves to `noBaseline`. During
+a measurement it takes effect when the measurement ends (§7).
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `reason` | Why; stored in the baseline history | String | `fiber moved` |
+
+Ack data: `error` (String, `""` when done).
+
+```json
+{"reason": "fiber moved"}
+```
+
+##### 6.6.5.6 GET_RESULTS (server → F20)
+
+The server reads stored results, one page per request.
+
+Request data:
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `since` | Results measured at or after this time | String, UTC time | `2026-10-07T00:00:00.000Z` |
+| 2 | `page` | Page to return | Integer, from 1 | `1` |
+
+Response data:
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `results` | RESULT data (6.6.5.2), oldest first | Array of Object | |
+| 2 | `page` | This page | Integer | `1` |
+| 3 | `pages` | Number of pages; 0 when no results | Integer | `3` |
+| 4 | `error` | `""` on success | String | `""` |
+
+##### 6.6.5.7 GET_SPECTRUM (server → F20)
+
+The server reads the spectrum of one result.
+
+Request data:
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `result_id` | Result to read | String, UUID | `3f2a9c1e-…` |
+
+Response data:
+
+| No. | Key | Description | Format | Example |
+|---|---|---|---|---|
+| 1 | `result_id` | Copied from the request | String, UUID | `3f2a9c1e-…` |
+| 2 | `csv` | Text of the result's `.csv` spectrum file (§6.5); `""` on error | String | |
+| 3 | `error` | `""` on success; `resultNotFound` for an unknown ID | String | `""` |
+
+Spectra are kilobytes, so they fit in the reply payload; no file channel.
+
+#### 6.6.6 Receive rules (f20app)
+
+f20app checks each message on `.../receive` in this order:
+
+1. Not valid JSON, or an envelope field missing → drop it and log it.
+2. `machine_sn` is not this F20's serial → drop it and log it.
+3. `command_type` is `ack` or `response` → match it to the sent message by
+   `transaction_id`; no match → log it and drop it.
+4. `transaction_id` already answered → send the same answer again; do not
+   run the command again. QoS 1 can deliver a message twice; f20app keeps
+   the last 100 answers.
+5. `command` not in 6.6.4 → response with error `unknownCommand`.
+6. A `data` field missing or of the wrong type → response with error
+   `badRequest`; `message` names the field.
+7. Otherwise run the command. `measure` passes the same check as the
+   MEASURE button first (refusal codes in 6.6.5.3).
+
+`unknownCommand`, `badRequest` and `resultNotFound` exist only on MQTT.
+
+#### 6.6.7 Broker and transport
 
 - Broker host, credentials/TLS and MQTT version follow the plant standard —
   confirm with IT (open item 10).
-- Spectra are kilobytes, so they fit in the reply payload; no file channel.
 - REST + WebSocket is the documented alternative (not the default); the
   internal design keeps the transport behind one interface.
 
