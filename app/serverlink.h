@@ -25,17 +25,28 @@ class ServerLink : public QObject
     {
     }
 
+    // F20APP's own messages (spec 8.2.4). status: the latest data, repeated
+    // by the link (every 1 s over MQTT). result and alarm wait for the
+    // server's ack.
     virtual void publishStatus(const f20::json &status) = 0;
     virtual void publishResult(const f20::json &result) = 0;
     virtual void publishAlarm(const QString &kind, const f20::json &data) = 0;
+
+    // Answers to the server's requests, matched by transaction id. data
+    // gets error "" when it has no error key (spec 8.2.3).
+    virtual void sendResponse(const QString &transactionId, const QString &command, const f20::json &data) = 0;
+    virtual void sendAck(const QString &transactionId, const QString &command, const f20::json &data) = 0;
 
     virtual ServerConnection connectionState() const = 0;
     virtual QString          connectionDetails() const = 0; // broker address and topics, for Diagnostics
 
   signals:
-    // Remote commands (cmd/measure, cmd/baselineInvalidate...) arrive here.
-    void remoteMeasureRequested(const QString &recipeName, const QString &sampleId);
-    void remoteBaselineInvalidate();
+    // The server's requests (spec 8.2.4). Each one is answered once with
+    // sendResponse() or sendAck() and the same transaction id.
+    void remoteMeasureRequested(const QString &transactionId, const QString &recipeName, const QString &sampleId);
+    void remoteBaselineInvalidate(const QString &transactionId, const QString &reason);
+    void resultsRequested(const QString &transactionId, const QString &sinceUtc, int page);
+    void spectrumRequested(const QString &transactionId, const QString &resultId);
 
     void connectionChanged(ServerConnection state);
     void logLine(const QString &line); // feed for the diagnostics log
@@ -50,6 +61,8 @@ class NullServerLink : public ServerLink
     void publishStatus(const f20::json &status) override;
     void publishResult(const f20::json &result) override;
     void publishAlarm(const QString &kind, const f20::json &data) override;
+    void sendResponse(const QString &transactionId, const QString &command, const f20::json &data) override;
+    void sendAck(const QString &transactionId, const QString &command, const f20::json &data) override;
 
     ServerConnection connectionState() const override
     {
@@ -59,4 +72,7 @@ class NullServerLink : public ServerLink
     {
         return "no broker in f20.ini";
     }
+
+  private:
+    f20::json lastStatus_; // logged only when it changes, not every tick
 };

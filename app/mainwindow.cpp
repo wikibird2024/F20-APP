@@ -250,6 +250,8 @@ ServerLink* MainWindow::createServerLink() {
 #ifdef F20_HAS_MQTT
     MqttServerLink::Settings link;
     link.serial = settings_.value("device/serial").toString().trimmed();
+    link.statusIntervalMs = settings_.value("mqtt/statusIntervalMs", link.statusIntervalMs).toInt();
+    link.ackTimeoutMs = settings_.value("mqtt/ackTimeoutMs", link.ackTimeoutMs).toInt();
     if (link.serial.isEmpty())
         qWarning().noquote() << "[device] serial is empty in f20.ini - MQTT topics will be wrong";
     link.broker.host = broker;
