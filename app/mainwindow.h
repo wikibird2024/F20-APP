@@ -7,11 +7,13 @@
 
 #include <QDir>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSettings>
 #include <QTimer>
 
 #include <optional>
 
+class BaselineWizard;
 class MeasureScreen;
 class HistoryScreen;
 class DiagnosticsScreen;
@@ -66,6 +68,7 @@ private:
     f20app::BaselineTracker baseline_;
     Storage storage_;
     ServerLink* serverLink_ = nullptr;
+    QPointer<BaselineWizard> baselineWizard_; // null when no wizard is open
 
     MeasureScreen* measureScreen_;
     HistoryScreen* historyScreen_;

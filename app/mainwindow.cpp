@@ -133,6 +133,12 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     // Bridge wiring
     connect(&bridge_, &BridgeClient::connected, this, &MainWindow::onBridgeConnected);
     connect(&bridge_, &BridgeClient::disconnected, this, [this] {
+        // Close an open baseline wizard first, while the state is still
+        // Baselining: its finished handler then keeps a commit that already
+        // happened. Closed after the drop, the state would be Fault and the
+        // commit ignored - the app would stay in NoBaseline.
+        if (baselineWizard_)
+            baselineWizard_->reject();
         // Forget the age: on reconnect it comes back from the bridge
         // ("baseline still valid?") and the database ("since when?").
         baseline_.invalidate();
@@ -448,6 +454,7 @@ void MainWindow::runBaselineWizard() {
     }
     state_.onBaselineWizardOpened();
     auto* wizard = new BaselineWizard(bridge_, this);
+    baselineWizard_ = wizard;
     // finished: Finish, Cancel and the window's close button all end here.
     // A commit counts even if the operator then cancels - the bridge has it.
     connect(wizard, &QDialog::finished, this, [this, wizard] {

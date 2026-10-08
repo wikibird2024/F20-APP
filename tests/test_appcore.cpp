@@ -122,6 +122,23 @@ TEST_CASE("wizard: Baselining blocks measuring; commit -> Ready, cancel -> NoBas
     CHECK_ENUM_EQ(machine.state(), AppState::Fault);
 }
 
+// MainWindow closes the wizard BEFORE it reports the bridge drop, because a
+// close after the drop is ignored (case above). In this order a commit made
+// before the drop survives: after reconnect the stored commit restores Ready.
+TEST_CASE("bridge drop with the wizard open: closing it first keeps the commit") {
+    AppStateMachine machine;
+    machine.onBridgeUp();
+    machine.onBaselineWizardOpened();
+
+    machine.onBaselineWizardClosed(true); // committed, then the bridge drops
+    machine.onBridgeDown();
+    CHECK_ENUM_EQ(machine.state(), AppState::Fault);
+
+    machine.onBridgeUp();
+    machine.onBaselineValid(); // restoreBaselineAge() found the stored commit
+    CHECK_ENUM_EQ(machine.state(), AppState::Ready);
+}
+
 TEST_CASE("re-analysis returns to the state it came from") {
     AppStateMachine machine;
     machine.onBridgeUp();
