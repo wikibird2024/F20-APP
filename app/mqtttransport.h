@@ -21,6 +21,14 @@ class MqttTransport : public QObject
         QString username; // empty = no login
         QString password;
         int     keepAliveSeconds = 10;
+        int     mqttVersion = 311; // 311 = MQTT 3.1.1, 500 = MQTT 5
+        // TLS (spec 6.6.7): the broker certificate is always checked
+        // against caFile, host name included. Files are PEM.
+        bool    useTls = false;
+        QString caFile;
+        QString clientCertFile;    // "" = no client certificate
+        QString clientKeyFile;     // "" = the key is inside clientCertFile
+        QString clientKeyPassword; // "" = key not encrypted
         // Retry delays, same rule as BridgeClient: first delay, x1.6 per
         // retry, +-20 % jitter, a cap.
         int reconnectFirstDelayMs = 1000;
@@ -53,6 +61,9 @@ class MqttTransport : public QObject
   signals:
     void connected();
     void disconnected();
+    // One connect attempt failed; reason is a plain sentence. Retrying
+    // goes on (until disconnectFromBroker()).
+    void connectAttemptFailed(const QString &reason);
     void messageReceived(const QString &topic, const QByteArray &payload);
     void logLine(const QString &line); // feed for the diagnostics log
 };

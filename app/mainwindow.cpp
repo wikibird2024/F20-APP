@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include "baselinewizard.h"
+#include "brokertest.h"
 #include "devicecheck.h"
 #include "f20/envelope.h"
 #include "diagnosticsscreen.h"
@@ -11,6 +12,7 @@
 #include "measurescreen.h"
 #include "mqttserverlink.h"
 #include "serverlink.h"
+#include "settingsscreen.h"
 
 #ifdef F20_HAS_MQTT
 #include "pahomqtttransport.h"
@@ -70,15 +72,21 @@ QDateTime toDateTimeUtc(f20app::BaselineTracker::Clock::time_point time) {
 
 } // namespace
 
-MainWindow::MainWindow(const QString& configPath, QWidget* parent)
+MainWindow::MainWindow(const QString& configPath, const QString& changesPath, QWidget* parent)
     : QMainWindow(parent),
       settings_(configPath, QSettings::IniFormat),
+      appSettings_(AppSettings::load(configPath, changesPath)),
       configDir_(QFileInfo(configPath).absoluteDir()) {
     setWindowTitle("F20 control");
     resize(1100, 720);
 
     if (!QFileInfo::exists(configPath))
         qWarning().noquote() << "config file not found:" << configPath << "- using defaults";
+    // Start anyway: an engineer fixes these in the Settings tab (spec §6.7).
+    for (const QString& note : appSettings_.loadNotes)
+        qWarning().noquote() << "[settings]" << note;
+    for (const QString& problem : appSettings_.problems())
+        qWarning().noquote() << "[settings]" << problem;
 
     loadRecipeLimits();
     // Power-on, as far as the software can tell: the app starts with Windows.
@@ -89,7 +97,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     bridge_.setTiming(timing);
     // Acquire and analyze can take much longer than a status request.
     measureTimeoutMs_ = settings_.value("bridge/measureTimeoutMs", 60000).toInt();
-    expectedSerial_ = settings_.value("device/serial").toString().trimmed();
+    expectedSerial_ = appSettings_.deviceSerial.trimmed();
     resultsPageSize_ = std::clamp(settings_.value("mqtt/pageSize", 50).toInt(), 1, 500);
 
     const QString databasePath =
@@ -103,9 +111,11 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     measureScreen_ = new MeasureScreen;
     historyScreen_ = new HistoryScreen(storage_);
     diagnosticsScreen_ = new DiagnosticsScreen;
+    auto* settingsScreen = new SettingsScreen(configPath, changesPath);
     tabs->addTab(measureScreen_, "Measure");
     tabs->addTab(historyScreen_, "History / SPC");
     tabs->addTab(diagnosticsScreen_, "Diagnostics");
+    tabs->addTab(settingsScreen, "Settings");
     setCentralWidget(tabs);
 
     auto* toolbar = addToolBar("main");
@@ -123,6 +133,22 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     statusBar()->addPermanentWidget(serverLabel_);
     statusBar()->addPermanentWidget(warmUpLabel_);
     statusBar()->addPermanentWidget(baselineLabel_);
+    // Right corner: tells at a glance which build is running.
+    statusBar()->addPermanentWidget(new QLabel("v" + QCoreApplication::applicationVersion()));
+
+    // Settings wiring (spec §6.7). Saved values wait for a restart; the
+    // notice stays until then, so the old values never look "ignored".
+    auto* restartNotice = new QLabel("Settings changed - restart to use them");
+    restartNotice->setStyleSheet("color: #b35900; font-weight: bold;");
+    restartNotice->hide();
+    statusBar()->addPermanentWidget(restartNotice);
+    connect(settingsScreen, &SettingsScreen::saved, restartNotice, &QLabel::show);
+    connect(settingsScreen, &SettingsScreen::restartRequested, this, &MainWindow::restartApp);
+    connect(settingsScreen, &SettingsScreen::reloadRecipesRequested, this, &MainWindow::loadRecipes);
+    connect(tabs, &QTabWidget::currentChanged, settingsScreen, [tabs, settingsScreen] {
+        if (tabs->currentWidget() != settingsScreen)
+            settingsScreen->lock(); // leaving the tab locks it
+    });
 
     loadRecipes();
 
@@ -193,10 +219,10 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
             this, [this] {
                 bridge_.connectToBridge(
                     settings_.value("bridge/host", "127.0.0.1").toString(),
-                    static_cast<quint16>(settings_.value("bridge/port", 5555).toUInt()));
+                    static_cast<quint16>(appSettings_.bridgePort));
             });
 
-    // Server requests (spec 8.2.4): the same paths as the operator's
+    // Server requests (spec 6.6.4): the same paths as the operator's
     // buttons, each answered once with its transaction id.
     connect(serverLink_, &ServerLink::remoteMeasureRequested, this,
             [this](const QString& transactionId, const QString& recipe, const QString& sampleId) {
@@ -227,7 +253,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
 
     bridge_.connectToBridge(
         settings_.value("bridge/host", "127.0.0.1").toString(),
-        static_cast<quint16>(settings_.value("bridge/port", 5555).toUInt()));
+        static_cast<quint16>(appSettings_.bridgePort));
     historyScreen_->refresh();
 }
 
@@ -241,28 +267,22 @@ MainWindow::~MainWindow() {
     ageTimer_.disconnect();
 }
 
-// MQTT when f20.ini names a broker and the build has Paho; otherwise the
+// MQTT when the settings name a broker and the build has Paho; otherwise the
 // logging stand-in, and the app works exactly as without a server.
 ServerLink* MainWindow::createServerLink() {
-    const QString broker = settings_.value("mqtt/broker").toString().trimmed();
-    if (broker.isEmpty())
+    if (appSettings_.mqttBroker.trimmed().isEmpty())
         return new NullServerLink(this);
 #ifdef F20_HAS_MQTT
     MqttServerLink::Settings link;
-    link.serial = settings_.value("device/serial").toString().trimmed();
+    link.serial = appSettings_.deviceSerial.trimmed();
     link.statusIntervalMs = settings_.value("mqtt/statusIntervalMs", link.statusIntervalMs).toInt();
     link.ackTimeoutMs = settings_.value("mqtt/ackTimeoutMs", link.ackTimeoutMs).toInt();
-    if (link.serial.isEmpty())
-        qWarning().noquote() << "[device] serial is empty in f20.ini - MQTT topics will be wrong";
-    link.broker.host = broker;
-    link.broker.port = static_cast<quint16>(settings_.value("mqtt/port", 1883).toUInt());
-    link.broker.username = settings_.value("mqtt/username").toString();
-    link.broker.password = settings_.value("mqtt/password").toString();
+    link.broker = transportSettings(appSettings_);
     link.broker.keepAliveSeconds =
         settings_.value("mqtt/keepAliveSeconds", link.broker.keepAliveSeconds).toInt();
     return new MqttServerLink(new PahoMqttTransport, link, this);
 #else
-    qWarning().noquote() << "f20.ini names an MQTT broker, but this build has no MQTT"
+    qWarning().noquote() << "the settings name an MQTT broker, but this build has no MQTT"
                             " (Eclipse Paho not found) - server messages are only logged";
     return new NullServerLink(this);
 #endif
@@ -284,7 +304,7 @@ QString MainWindow::resolvePath(const QString& path) const {
 void MainWindow::loadRecipes() {
     // Recipe names come from the FILMeasure recipes folder (spec §6.1);
     // in development a plain folder with dummy files mirrors the sim names.
-    const QString folder = resolvePath(settings_.value("recipes/folder", "recipes").toString());
+    const QString folder = resolvePath(appSettings_.recipesFolder);
     QStringList names;
     for (const QFileInfo& info :
          QDir(folder).entryInfoList({"*.fmrcp"}, QDir::Files, QDir::Name))
@@ -442,7 +462,7 @@ void MainWindow::publishResultToServer(const f20::MeasureResult& result,
     facts.recipeName = record.recipeName.toStdString();
     facts.sampleId = record.sampleId.toStdString();
     facts.operatorName = record.operatorName.toStdString();
-    facts.reanalyzedFrom = record.reanalyzedFrom.toStdString();
+    facts.reanalyzedFrom = record.reanalyzedFromResultId.toStdString();
     if (record.baselineCommittedAtUtc)
         facts.baselineAgeMinutes =
             static_cast<int>(record.baselineCommittedAtUtc->secsTo(toDateTimeUtc(now)) / 60);
@@ -494,7 +514,7 @@ void MainWindow::answerResults(const QString& transactionId, const QString& sinc
         facts.sampleId = stored.sampleId.toStdString();
         facts.operatorName = stored.operatorName.toStdString();
         facts.baselineAgeMinutes = stored.baselineAgeMinutes;
-        facts.reanalyzedFrom = stored.reanalyzedFrom.toStdString();
+        facts.reanalyzedFrom = stored.reanalyzedFromResultId.toStdString();
         results.push_back(f20::serverResultData(stored.result, facts));
     }
     const int pages = std::max(1, (found.total + resultsPageSize_ - 1) / resultsPageSize_);
@@ -542,6 +562,10 @@ void MainWindow::startReanalysis(const QString& spectrumPath) {
         storage_.sampleIdForSpectrum(spectrumPath).value_or(measureScreen_->sampleId());
     record.spectrumFile = spectrumPath;
     record.reanalyzedFrom = spectrumPath;
+    record.reanalyzedFromResultId = storage_.resultIdForSpectrum(spectrumPath).value_or("");
+    if (record.reanalyzedFromResultId.isEmpty())
+        qInfo().noquote() << "[storage] no stored result owns" << spectrumPath
+                          << "- reanalyzed_from is sent empty";
 
     bridge_.send("setRecipe", {{"name", record.recipeName.toStdString()}}, this,
                  [this, record](const f20::Reply& recipeReply) {
@@ -866,12 +890,11 @@ void MainWindow::syncBaselineState() {
 // key missing in a profile falls back to the default.
 void MainWindow::loadRecipeLimits() {
     f20app::BaselineLimits defaults;
-    defaults.warnMinutes = settings_.value("baseline/warnMinutes", defaults.warnMinutes).toInt();
-    defaults.blockMinutes = settings_.value("baseline/blockMinutes", defaults.blockMinutes).toInt();
-    defaults.warmUpMinutes =
-        settings_.value("baseline/warmUpMinutes", defaults.warmUpMinutes).toInt();
+    defaults.warnMinutes = appSettings_.baselineWarnMinutes;
+    defaults.blockMinutes = appSettings_.baselineBlockMinutes;
+    defaults.warmUpMinutes = appSettings_.warmUpMinutes;
     if (const auto problem = f20app::checkLimits(defaults)) {
-        qWarning().noquote() << "[baseline] defaults in f20.ini not usable:"
+        qWarning().noquote() << "[baseline] default limits not usable:"
                              << QString::fromStdString(*problem) << "- using 20/30/15 min";
         defaults = {};
     }
@@ -937,6 +960,22 @@ void MainWindow::applyRecipeLimits(const QString& recipe) {
 // Skipping the warm-up takes one confirm click; the log records who
 // skipped it and how many minutes were left, so a drifting result can be
 // traced back to a cold lamp. Non-modal, like the wizard.
+// Restart from the Settings screen (spec §6.7). Refused while a
+// measurement or a baseline runs: it would be lost half way.
+void MainWindow::restartApp() {
+    const f20app::AppState now = state_.state();
+    if (now == f20app::AppState::Measuring || now == f20app::AppState::Analyzing ||
+        now == f20app::AppState::Baselining || baselineWizard_) {
+        QMessageBox::information(this, "Restart",
+                                 QString("Not now: the app is %1. Restart when it is done.")
+                                     .arg(baselineWizard_ ? "in the baseline wizard"
+                                                          : f20app::toString(now)));
+        return;
+    }
+    restartRequested_ = true;
+    QCoreApplication::quit(); // main() starts the new copy after this window is gone
+}
+
 void MainWindow::skipWarmUp() {
     if (warmUp_.isDone())
         return;
@@ -1094,7 +1133,7 @@ void MainWindow::publishStatus() {
     const f20::json baselineInfo{
         {"valid", usable && (baseline == f20app::BaselineStatus::Fresh ||
                              baseline == f20app::BaselineStatus::Aging)},
-        {"age_minutes", age ? f20::json(*age) : f20::json(nullptr)}};
+        {"age_minutes", age.value_or(0)}}; // never null on the wire (spec 6.6.3)
     const QDateTime midnightUtc = QDateTime(QDate::currentDate(), QTime(0, 0)).toUTC();
     const f20::json status{
         {"software_version", QCoreApplication::applicationVersion().toStdString()},

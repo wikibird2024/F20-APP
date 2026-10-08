@@ -8,15 +8,22 @@ qt_standard_project_setup()
 # The bridge client, the storage and the server link in a library of their
 # own, so the Qt unit tests (tests/qt) can link them without the screens.
 add_library(f20appqt STATIC
+    appsettings.cpp
+    brokertest.cpp
     bridgeclient.cpp
+    engineerpassword.cpp
     logretention.cpp
     storage.cpp
+    storedsecret.cpp
     serverlink.cpp
     mqttserverlink.cpp
     mqtttransport.h # interface only; listed so moc sees it
 )
 target_include_directories(f20appqt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(f20appqt PUBLIC Qt6::Network Qt6::Sql f20common)
+target_link_libraries(f20appqt PUBLIC Qt6::Network Qt6::Sql f20common f20appcore)
+if(WIN32)
+    target_link_libraries(f20appqt PRIVATE crypt32) # DPAPI for saved passwords
+endif()
 f20_warnings(f20appqt)
 
 # MQTT link to the server (spec §6.6) on Eclipse Paho MQTT C++. Optional:
@@ -46,6 +53,7 @@ qt_add_executable(f20app
     baselinewizard.cpp
     historyscreen.cpp
     diagnosticsscreen.cpp
+    settingsscreen.cpp
 )
 # File name on disk is upper case; the CMake target name stays f20app.
 set_target_properties(f20app PROPERTIES OUTPUT_NAME "F20APP")

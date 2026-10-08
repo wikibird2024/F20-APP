@@ -1,4 +1,5 @@
 #pragma once
+#include "appsettings.h"
 #include "appstatemachine.h"
 #include "baselinetracker.h"
 #include "bridgeclient.h"
@@ -31,14 +32,18 @@ class QLabel;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    // configPath: the f20.ini to use. Relative paths inside it (database,
-    // recipes, spectra) resolve against the ini's folder, never against the
-    // working folder - so a shortcut with another "Start in" folder still
-    // finds the same database.
-    explicit MainWindow(const QString& configPath, QWidget* parent = nullptr);
+    // configPath: the f20.ini to use (the defaults). changesPath: the
+    // Settings screen's file, whose values win (spec §6.7). Relative paths
+    // (database, recipes, spectra) resolve against f20.ini's folder, never
+    // against the working folder - so a shortcut with another "Start in"
+    // folder still finds the same database.
+    MainWindow(const QString& configPath, const QString& changesPath, QWidget* parent = nullptr);
     ~MainWindow() override;
 
     bool bridgeConnected() const;
+    // True after the Settings screen asked for a restart and the window
+    // closed for it; main() then starts the app again.
+    bool restartRequested() const { return restartRequested_; }
 
 private:
     enum class Trigger { operatorButton, autoCycle, remote };
@@ -68,6 +73,7 @@ private:
     void enterDeviceFault(const QString& message);
     void closeBaselineDialogs();
     void onBridgeEvent(const QString& name, const f20::json& data);
+    void restartApp();
     void restoreBaselineAge();
     void offerBaselineRecovery();
     void recoverBaseline();
@@ -84,7 +90,8 @@ private:
     QString resolvePath(const QString& path) const;
     QString spectrumFilePath(const QString& sampleId) const;
 
-    QSettings settings_;
+    QSettings settings_;     // f20.ini: settings the Settings screen does not show
+    AppSettings appSettings_; // the ones it shows, changes included
     QDir configDir_;
     int measureTimeoutMs_ = 60000;
     BridgeClient bridge_;
@@ -118,4 +125,5 @@ private:
     QString bridgeOnlyVersion_; // for the server status
     QString filmeasureVersion_;
     int resultsPageSize_ = 50;  // get_results page size
+    bool restartRequested_ = false;
 };

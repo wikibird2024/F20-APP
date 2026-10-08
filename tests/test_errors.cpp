@@ -24,7 +24,7 @@ TEST_CASE("unknown name gives nullopt, not a crash") {
     CHECK_FALSE(errorCodeFromString("somethingElse").has_value());
 }
 
-TEST_CASE("operator messages are plain sentences (spec 8.2)") {
+TEST_CASE("operator messages are plain sentences (spec 5.2)") {
     CHECK(operatorMessage(ErrorCode::measureNotReady) == "Run the baseline first");
     CHECK(operatorMessage(ErrorCode::recipeNotFound, "SiO2 on Si") ==
           "Recipe 'SiO2 on Si' not found in FILMeasure");

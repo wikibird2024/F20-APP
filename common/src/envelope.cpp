@@ -119,8 +119,7 @@ json serverResultData(const MeasureResult& result, const ResultFacts& facts) {
               {"layers", std::move(layers)},
               {"reanalyzed_from", facts.reanalyzedFrom},
               {"error", ""}};
-    data["baseline_age_minutes"] =
-        facts.baselineAgeMinutes ? json(*facts.baselineAgeMinutes) : json(nullptr);
+    data["baseline_age_minutes"] = facts.baselineAgeMinutes.value_or(0); // never null (spec 6.6.3)
     return data;
 }
 

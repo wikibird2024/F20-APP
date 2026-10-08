@@ -25,7 +25,7 @@ class ServerLink : public QObject
     {
     }
 
-    // F20APP's own messages (spec 8.2.4). status: the latest data, repeated
+    // F20APP's own messages (spec 6.6.4). status: the latest data, repeated
     // by the link (every 1 s over MQTT). result and alarm wait for the
     // server's ack.
     virtual void publishStatus(const f20::json &status) = 0;
@@ -33,7 +33,7 @@ class ServerLink : public QObject
     virtual void publishAlarm(const QString &kind, const f20::json &data) = 0;
 
     // Answers to the server's requests, matched by transaction id. data
-    // gets error "" when it has no error key (spec 8.2.3).
+    // gets error "" when it has no error key (spec 6.6.3).
     virtual void sendResponse(const QString &transactionId, const QString &command, const f20::json &data) = 0;
     virtual void sendAck(const QString &transactionId, const QString &command, const f20::json &data) = 0;
 
@@ -41,7 +41,7 @@ class ServerLink : public QObject
     virtual QString          connectionDetails() const = 0; // broker address and topics, for Diagnostics
 
   signals:
-    // The server's requests (spec 8.2.4). Each one is answered once with
+    // The server's requests (spec 6.6.4). Each one is answered once with
     // sendResponse() or sendAck() and the same transaction id.
     void remoteMeasureRequested(const QString &transactionId, const QString &recipeName, const QString &sampleId);
     void remoteBaselineInvalidate(const QString &transactionId, const QString &reason);

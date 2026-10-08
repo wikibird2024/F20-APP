@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMutex>
+#include <QProcess>
 #include <QSettings>
 #include <QTimer>
 
@@ -66,6 +67,21 @@ QString findConfig(const QStringList& arguments) {
     return QDir(QCoreApplication::applicationDirPath()).filePath("f20.ini");
 }
 
+// The Settings screen's changes (spec §6.7). Installed on Windows:
+// ProgramData, because Program Files is read-only at run time. With
+// --config (development, tests) or elsewhere: next to that f20.ini, so a
+// test never picks up the PC's real settings.
+QString findChangesFile(const QStringList& arguments, const QString& configPath) {
+#ifdef Q_OS_WIN
+    if (!arguments.contains("--config"))
+        return QDir(qEnvironmentVariable("ProgramData", "C:/ProgramData"))
+            .filePath("Greystone/f20app.ini");
+#else
+    Q_UNUSED(arguments)
+#endif
+    return QFileInfo(configPath).absoluteDir().filePath("f20app.ini");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -77,8 +93,9 @@ int main(int argc, char** argv) {
     g_log.dir = QDir(QFileInfo(configPath).absoluteDir().filePath("logs"));
     QDir().mkpath(g_log.dir.absolutePath());
     qInstallMessageHandler(messageHandler);
+    const QString changesPath = findChangesFile(app.arguments(), configPath);
     qInfo().noquote() << "f20app" << QCoreApplication::applicationVersion()
-                      << "config:" << configPath;
+                      << "config:" << configPath << "changes:" << changesPath;
 
     // Old logs go at start and every 6 h - the app runs for weeks.
     const int keepDays = QSettings(configPath, QSettings::IniFormat)
@@ -96,8 +113,9 @@ int main(int argc, char** argv) {
     logCleanup.start(6 * 60 * 60 * 1000);
 
     int exitCode = 0;
+    bool restart = false;
     {
-        MainWindow window(configPath);
+        MainWindow window(configPath, changesPath);
 
         // --smoke: start, try to reach the bridge, report and exit. Lets the
         // build server (and us) verify app+sim end to end without a display.
@@ -113,7 +131,17 @@ int main(int argc, char** argv) {
         } else {
             window.show();
             exitCode = app.exec();
+            restart = window.restartRequested();
         }
+    }
+    // Restart from the Settings screen: the new copy starts only now, with
+    // the database, bridge and MQTT of this one closed - never two copies
+    // with the same MQTT client ID.
+    if (restart) {
+        qInfo() << "[settings] restarting to use the new settings";
+        if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                     app.arguments().mid(1)))
+            qCritical() << "[settings] restart failed - start the app by hand";
     }
     // The log file is a static: stop using it before statics are destroyed.
     qInstallMessageHandler(nullptr);

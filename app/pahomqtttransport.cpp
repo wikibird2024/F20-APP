@@ -9,6 +9,41 @@
 #include <algorithm>
 #include <chrono>
 
+namespace
+{
+
+// The usual connect failures as a sentence for the log and the Settings
+// screen's Test connection. MQTT 3.1.1 brokers answer with a CONNACK return
+// code (1-5); MQTT 5 brokers with a reason code (128 and up); Paho's own
+// failures (TLS, no answer) are negative.
+QString connectFailure(int returnCode, int reasonCode)
+{
+    // 255 is Paho's "no MQTT 5 reason code" (an MQTT 3.1.1 connect), not a code.
+    const int code = reasonCode >= 128 && reasonCode < 255 ? reasonCode : returnCode;
+    switch (code) {
+        case 1:
+        case 132:
+            return "the broker does not accept this MQTT version";
+        case 2:
+        case 133:
+            return "the broker refused the client ID";
+        case 4:
+        case 134:
+            return "the broker refused the login: wrong user name or password";
+        case 5:
+        case 135:
+            return "the broker refused the login: not authorized";
+        case 3:
+        case 136:
+            return "the broker is not available";
+        default:
+            break;
+    }
+    return QString("connect failed (code %1): no MQTT answer, or the TLS check failed").arg(code);
+}
+
+} // namespace
+
 // Paho reports the end of a connect attempt here, on its own thread.
 class PahoMqttTransport::ConnectListener : public mqtt::iaction_listener
 {
@@ -25,7 +60,7 @@ class PahoMqttTransport::ConnectListener : public mqtt::iaction_listener
 
     void on_failure(const mqtt::token &token) override
     {
-        const QString reason = QString("connect failed, code %1").arg(token.get_return_code());
+        const QString reason = connectFailure(token.get_return_code(), token.get_reason_code());
         QMetaObject::invokeMethod(
             owner_,
             [owner = owner_, generation = generation_, reason] { owner->onConnectFailed(generation, reason); },
@@ -59,11 +94,13 @@ void PahoMqttTransport::connectToBroker(const Settings &settings)
     reconnectAttempts_ = 0;
     ++generation_;
 
-    const std::string serverUri = QString("tcp://%1:%2").arg(settings_.host).arg(settings_.port).toStdString();
+    const std::string serverUri =
+        QString("%1://%2:%3").arg(settings_.useTls ? "ssl" : "tcp", settings_.host).arg(settings_.port).toStdString();
     try {
         // No persistence and no offline buffer: publish() while offline
         // fails, and the caller decides what to send again.
-        client_ = std::make_unique<mqtt::async_client>(serverUri, settings_.clientId.toStdString());
+        const mqtt::create_options options(settings_.mqttVersion == 500 ? MQTTVERSION_5 : MQTTVERSION_3_1_1);
+        client_ = std::make_unique<mqtt::async_client>(serverUri, settings_.clientId.toStdString(), options);
     } catch (const std::exception &error) {
         // Bad URI or client id: retrying cannot help, the config must change.
         wantConnection_ = false;
@@ -132,8 +169,18 @@ bool PahoMqttTransport::publish(const QString &topic, const QByteArray &payload,
 void PahoMqttTransport::startConnect()
 {
     mqtt::connect_options_builder builder;
-    builder.mqtt_version(MQTTVERSION_3_1_1); // the company format needs no MQTT 5 feature
-    builder.clean_session(true);
+    if (settings_.mqttVersion == 500) {
+        // MQTT 5 has "clean start" instead of "clean session"; Paho refuses
+        // the connect when the old flag is still set.
+        builder.mqtt_version(MQTTVERSION_5);
+        builder.clean_session(false);
+        builder.clean_start(true);
+    } else {
+        builder.mqtt_version(MQTTVERSION_3_1_1); // the company format needs no MQTT 5 feature
+        builder.clean_session(true);
+    }
+    if (settings_.useTls)
+        builder.ssl(sslOptions());
     builder.keep_alive_interval(std::chrono::seconds(settings_.keepAliveSeconds));
     builder.connect_timeout(std::chrono::seconds(5));
     builder.automatic_reconnect(false); // our timer does it, see the header
@@ -154,6 +201,30 @@ void PahoMqttTransport::startConnect()
     } catch (const std::exception &error) {
         onConnectFailed(generation_, QString::fromUtf8(error.what()));
     }
+}
+
+// Always check the broker: its certificate must be signed by the CA file
+// and be for the host name we connect to (no "accept any certificate").
+//
+// No ssl error_handler: Paho C++ 1.2 passes connect_options by value, and
+// Paho C keeps a pointer to that temporary for the error callback, which
+// OpenSSL calls during the handshake after the temporary is gone (ASan:
+// stack-use-after-return). Test connection explains TLS failures with its
+// own QSslSocket check instead (brokertest.cpp).
+mqtt::ssl_options PahoMqttTransport::sslOptions() const
+{
+    mqtt::ssl_options_builder ssl;
+    ssl.trust_store(settings_.caFile.toStdString());
+    ssl.enable_server_cert_auth(true);
+    ssl.verify(true); // host name
+    if (!settings_.clientCertFile.isEmpty()) {
+        ssl.key_store(settings_.clientCertFile.toStdString());
+        const QString keyFile = settings_.clientKeyFile.isEmpty() ? settings_.clientCertFile : settings_.clientKeyFile;
+        ssl.private_key(keyFile.toStdString());
+        if (!settings_.clientKeyPassword.isEmpty())
+            ssl.private_keypassword(settings_.clientKeyPassword.toStdString());
+    }
+    return ssl.finalize();
 }
 
 // Same backoff as BridgeClient::scheduleReconnect (gRPC connection-backoff.md).
@@ -185,6 +256,7 @@ void PahoMqttTransport::onConnectFailed(int generation, const QString &reason)
     if (generation != generation_ || !wantConnection_)
         return;
     emit logLine("[mqtt] " + reason);
+    emit connectAttemptFailed(reason);
     scheduleReconnect();
 }
 

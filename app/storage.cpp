@@ -6,6 +6,8 @@
 #include <QVariant>
 #include <QtDebug>
 
+#include <iterator>
+
 namespace
 {
 
@@ -48,6 +50,20 @@ const char *const kUpgradeTo2[] = {
     " committedAtUtc TEXT NOT NULL,"
     " invalidatedAtUtc TEXT)",
     "PRAGMA user_version = 2",
+};
+
+// Version 3: the result id a re-analysis was made from, for the server
+// (spec 6.6.5.2 reanalyzed_from). reanalyzedFrom keeps the file path the
+// operator picked; old re-analysis rows get the id of the stored result
+// that owns that file, when there is one.
+const char *const kUpgradeTo3[] = {
+    "ALTER TABLE measurements ADD COLUMN reanalyzedFromResultId TEXT",
+    "UPDATE measurements SET reanalyzedFromResultId ="
+    " (SELECT o.resultId FROM measurements o"
+    "  WHERE o.spectrumFile = measurements.reanalyzedFrom AND o.reanalyzedFrom IS NULL"
+    "  ORDER BY o.id DESC LIMIT 1)"
+    " WHERE reanalyzedFrom IS NOT NULL",
+    "PRAGMA user_version = 3",
 };
 
 } // namespace
@@ -107,24 +123,31 @@ bool Storage::migrate()
     if (version < 1 && !exec(kCreateV1))
         return false;
 
-    if (version < 2) {
-        // DDL is transactional in SQLite: the upgrade happens completely or
-        // not at all, and user_version moves with it.
-        if (!db_.transaction())
-            return fail("cannot start the schema upgrade: " + db_.lastError().text());
-        for (const char *step : kUpgradeTo2) {
-            if (!exec(step)) {
-                db_.rollback();
-                return false;
-            }
-        }
-        if (!db_.commit()) {
-            const QString error = db_.lastError().text();
+    if (version < 2 && !upgrade(2, std::begin(kUpgradeTo2), std::end(kUpgradeTo2)))
+        return false;
+    if (version < 3 && !upgrade(3, std::begin(kUpgradeTo3), std::end(kUpgradeTo3)))
+        return false;
+    return true;
+}
+
+// DDL is transactional in SQLite: the upgrade happens completely or not at
+// all, and user_version moves with it.
+bool Storage::upgrade(int toVersion, const char *const *first, const char *const *last)
+{
+    if (!db_.transaction())
+        return fail("cannot start the schema upgrade: " + db_.lastError().text());
+    for (auto step = first; step != last; ++step) {
+        if (!exec(*step)) {
             db_.rollback();
-            return fail("cannot commit the schema upgrade: " + error);
+            return false;
         }
-        qInfo().noquote() << "[storage] schema upgraded to version 2";
     }
+    if (!db_.commit()) {
+        const QString error = db_.lastError().text();
+        db_.rollback();
+        return fail("cannot commit the schema upgrade: " + error);
+    }
+    qInfo().noquote() << "[storage] schema upgraded to version" << toVersion;
     return true;
 }
 
@@ -159,8 +182,9 @@ std::optional<QString> Storage::insertMeasurement(const f20::MeasureResult &resu
         query.prepare("INSERT INTO measurements (time, recipeName, channelSerial,"
                       " operatorName, sampleId, layerNumber, thicknessNm, n, k,"
                       " roughnessNm, gof, passed, spectrumFile, reanalyzedFrom, resultId,"
-                      " baselineCommittedAtUtc, baselineAgeMinutes, appVersion, bridgeVersion)"
-                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                      " baselineCommittedAtUtc, baselineAgeMinutes, appVersion, bridgeVersion,"
+                      " reanalyzedFromResultId)"
+                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
         query.addBindValue(isoUtc(nowUtc));
         query.addBindValue(record.recipeName);
         query.addBindValue(record.channelSerial);
@@ -180,6 +204,7 @@ std::optional<QString> Storage::insertMeasurement(const f20::MeasureResult &resu
         query.addBindValue(baselineAgeMinutes);
         query.addBindValue(record.appVersion);
         query.addBindValue(textOrNull(record.bridgeVersion));
+        query.addBindValue(textOrNull(record.reanalyzedFromResultId));
         if (!query.exec()) {
             fail(QString("insert of layer %1 failed: %2").arg(layer.layer).arg(query.lastError().text()));
             ok = false;
@@ -233,6 +258,18 @@ std::optional<QDateTime> Storage::lastValidBaseline(const QString &channelSerial
     if (!committedAt.isValid())
         return std::nullopt;
     return committedAt;
+}
+
+std::optional<QString> Storage::resultIdForSpectrum(const QString &spectrumFile)
+{
+    QSqlQuery query(db_);
+    query.prepare("SELECT resultId FROM measurements"
+                  " WHERE spectrumFile = ? AND reanalyzedFrom IS NULL AND resultId IS NOT NULL"
+                  " ORDER BY id DESC LIMIT 1");
+    query.addBindValue(spectrumFile);
+    if (!query.exec() || !query.next())
+        return std::nullopt;
+    return query.value(0).toString();
 }
 
 std::optional<QString> Storage::sampleIdForSpectrum(const QString &spectrumFile)
@@ -292,7 +329,8 @@ ResultPage Storage::resultsSince(const QDateTime &sinceUtc, int offset, int limi
         QSqlQuery rows(db_);
         rows.prepare(QString("SELECT time, recipeName, sampleId, operatorName, layerNumber, thicknessNm,"
                              " n, k, roughnessNm, gof, passed, spectrumFile, reanalyzedFrom,"
-                             " baselineAgeMinutes FROM measurements WHERE %1 = ? ORDER BY layerNumber")
+                             " baselineAgeMinutes, reanalyzedFromResultId"
+                             " FROM measurements WHERE %1 = ? ORDER BY layerNumber")
                          .arg(kResultKey));
         rows.addBindValue(key);
         if (!rows.exec())
@@ -311,6 +349,7 @@ ResultPage Storage::resultsSince(const QDateTime &sinceUtc, int offset, int limi
                 stored.reanalyzedFrom = rows.value(12).toString();
                 if (!rows.value(13).isNull())
                     stored.baselineAgeMinutes = rows.value(13).toInt();
+                stored.reanalyzedFromResultId = rows.value(14).toString();
             }
             f20::LayerResult layer;
             layer.layer = rows.value(4).toInt();

@@ -8,7 +8,7 @@ namespace
 {
 
 constexpr int         kMaxPayloadBytes = 1024 * 1024; // same limit as a bridge line
-constexpr std::size_t kRepliesKept = 32;
+constexpr std::size_t kRepliesKept = 100; // spec 6.6.6: the last 100 answers
 constexpr std::size_t kMaxAwaitingAck = 100; // older ones: the server backfills with get_results
 
 QString fromStd(const std::string &text)
@@ -43,7 +43,7 @@ MqttServerLink::MqttServerLink(MqttTransport *transport, const Settings &setting
     connect(transport_, &MqttTransport::messageReceived, this, &MqttServerLink::onMessage);
     connect(transport_, &MqttTransport::logLine, this, &ServerLink::logLine);
 
-    // Status every second (spec 8.2.5.1); if it stops, the server treats
+    // Status every second (spec 6.6.5.1); if it stops, the server treats
     // the F20 as offline.
     connect(&statusTimer_, &QTimer::timeout, this, [this] {
         if (lastStatus_ && transport_->isConnected())
@@ -54,12 +54,13 @@ MqttServerLink::MqttServerLink(MqttTransport *transport, const Settings &setting
 void MqttServerLink::start()
 {
     MqttTransport::Settings broker = settings_.broker;
-    broker.clientId = "f20-" + fromStd(machineSn_);
+    if (broker.clientId.trimmed().isEmpty()) // the Settings screen may set its own
+        broker.clientId = "f20-" + fromStd(machineSn_);
     // Last Will: the broker tells the server we are gone, even after a
     // power cut, when we can send nothing ourselves (Sparkplug's "death
     // certificate").
     broker.willTopic = sendTopic_;
-    broker.willPayload = envelope("status", "request", newTransactionId(), {{"machine_status", "Offline"}});
+    broker.willPayload = envelope("status", "request", newTransactionId(), {{"machine_status", "offline"}});
     broker.willQos = 1;
 
     transport_->subscribe(receiveTopic_, 1);
@@ -201,9 +202,12 @@ void MqttServerLink::reply(const QString &transactionId, const QString &command,
         emit logLine(QString("[mqtt] %1 %2 NOT sent - no broker connection").arg(command, transactionId));
 }
 
-void MqttServerLink::rejectRequest(const QString &transactionId, const QString &command, const QString &why)
+void MqttServerLink::rejectRequest(const QString &transactionId,
+                                   const QString &command,
+                                   const QString &why,
+                                   const char    *errorCode)
 {
-    reply(transactionId, command, "response", {{"error", "badRequest"}, {"message", why.toStdString()}});
+    reply(transactionId, command, "response", {{"error", errorCode}, {"message", why.toStdString()}});
 }
 
 QString MqttServerLink::connectionDetails() const
@@ -328,6 +332,6 @@ void MqttServerLink::onRequest(const QString &transactionId, const QString &comm
         inProgress_.insert(transactionId);
         emit spectrumRequested(transactionId, resultId);
     } else {
-        rejectRequest(transactionId, command, "unknown command");
+        rejectRequest(transactionId, command, "unknown command", "unknownCommand");
     }
 }

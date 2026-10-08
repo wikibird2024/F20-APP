@@ -16,16 +16,7 @@ const char* toString(AppState state) {
 }
 
 const char* machineStatus(AppState state) {
-    switch (state) {
-    case AppState::Starting:   return "Starting";
-    case AppState::NoBaseline: return "NoBaseline";
-    case AppState::Baselining: return "Baselining";
-    case AppState::Ready:      return "Ready";
-    case AppState::Measuring:  return "Measuring";
-    case AppState::Analyzing:  return "Analyzing";
-    case AppState::Fault:      return "Fault";
-    }
-    return "Unknown";
+    return toString(state); // spec 6.6.3: states are camelCase words on the wire too
 }
 
 void AppStateMachine::setChangeHandler(ChangeHandler handler) {

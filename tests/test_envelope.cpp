@@ -64,7 +64,7 @@ TEST_CASE("topics and machine_sn use the bare serial") {
     CHECK(receiveTopic("SIM001") == "SIM001/ar/f20/receive");
 }
 
-TEST_CASE("result data: spec 8.2.5.2 fields, optional n/k/roughness only when solved") {
+TEST_CASE("result data: spec 6.6.5.2 fields, optional n/k/roughness only when solved") {
     MeasureResult result;
     result.passed = true;
     result.gof = 0.987;
@@ -101,5 +101,5 @@ TEST_CASE("result data: spec 8.2.5.2 fields, optional n/k/roughness only when so
     CHECK_FALSE(data["layers"][1].contains("k"));
 
     facts.baselineAgeMinutes.reset();
-    CHECK(serverResultData(result, facts)["baseline_age_minutes"].is_null());
+    CHECK(serverResultData(result, facts)["baseline_age_minutes"] == 0); // never null
 }

@@ -10,7 +10,8 @@
 namespace mqtt
 {
 class async_client;
-}
+class ssl_options;
+} // namespace mqtt
 
 // MqttTransport on Eclipse Paho MQTT C++ (async_client).
 //
@@ -38,13 +39,14 @@ class PahoMqttTransport : public MqttTransport
   private:
     class ConnectListener; // Paho's iaction_listener; defined in the .cpp
 
-    void startConnect();
-    void scheduleReconnect();
-    void onConnectSucceeded(int generation);
-    void onConnectFailed(int generation, const QString &reason);
-    void onConnectionLost(int generation, const QString &cause);
-    void subscribeNow(const QString &topic, int qos);
-    void destroyClient();
+    void              startConnect();
+    mqtt::ssl_options sslOptions() const;
+    void              scheduleReconnect();
+    void              onConnectSucceeded(int generation);
+    void              onConnectFailed(int generation, const QString &reason);
+    void              onConnectionLost(int generation, const QString &cause);
+    void              subscribeNow(const QString &topic, int qos);
+    void              destroyClient();
 
     Settings                             settings_;
     std::unique_ptr<mqtt::async_client>  client_;

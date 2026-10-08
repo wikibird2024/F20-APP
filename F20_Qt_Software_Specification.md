@@ -201,7 +201,7 @@ by message text, finalized on the NUC against `FIRemoteTest.exe` behavior
 ## 6. Operator app (`f20app`)
 
 Qt 6 Widgets (or Quick — implementer's choice), x64, full screen on the NUC.
-Four screens.
+Five screens.
 
 ### 6.1 Measure screen
 
@@ -532,9 +532,63 @@ f20app checks each message on `.../receive` in this order:
 #### 6.6.7 Broker and transport
 
 - Broker host, credentials/TLS and MQTT version follow the plant standard —
-  confirm with IT (open item 10).
+  confirm with IT (open item 10). All of them are set in the Settings
+  screen (§6.7).
+- MQTT 3.1.1 (default) or MQTT 5; clean session; client ID
+  `f20-<bare serial>` (e.g. `f20-09A006`) unless the Settings screen sets
+  another one.
+- TLS (usually port 8883): the broker certificate is always checked against
+  the company CA file, including the host name; there is no "accept any
+  certificate" switch. A client certificate (mutual TLS) is optional:
+  certificate file + key file (or both in one file) + key password. Files
+  are PEM; a `.pfx/.p12` from IT is converted once with
+  `openssl pkcs12 -in f20.pfx -out f20.pem`.
 - REST + WebSocket is the documented alternative (not the default); the
   internal design keeps the transport behind one interface.
+
+### 6.7 Settings screen
+
+For the engineer or installer, not the operator: every setting that
+changes at go-live or on site is set here, without editing files.
+
+- **Lock.** The screen opens locked. One engineer password unlocks it; on
+  first use the engineer chooses it (at least 4 characters). Input is
+  masked; after 5 wrong tries the next try waits 30 s; the screen locks
+  again after 10 min without input or when the engineer leaves it.
+  Only a salted hash is stored (PBKDF2-HMAC-SHA256, 600 000 iterations,
+  same format as the C# app). Forgotten password: an administrator deletes
+  `engineerPasswordHash` from the settings file (below) and sets a new one.
+- **Groups and fields.**
+
+| Group | Fields |
+|---|---|
+| Server (MQTT broker) | broker address (empty = no server, messages only logged), port, user name, password, TLS on/off, CA certificate file, client certificate file, client key file, key password, client ID, MQTT version · **Test connection** |
+| Device | F20 serial number, with the MQTT topics it gives (§6.6.1) |
+| Bridge | port |
+| Recipes | recipes folder · **Reload recipes** |
+| Baseline | warn after / block after (minutes), lamp warm-up (minutes) — the defaults for recipes without their own profile |
+
+- **Test connection** connects to the broker with the values in the form
+  (not yet saved) and its own client ID, then disconnects; it shows one
+  sentence: connected, login refused, certificate not trusted, or no
+  answer.
+- **Save** checks every value with the same rules as the app start
+  (ports, serial, certificate files exist and match the TLS switch,
+  recipes folder exists, warn < block, …); nothing is saved while a problem
+  is listed. Each save is logged with the names of the changed settings
+  (never the passwords).
+- **Restart.** New values are used after a restart. After Save the status
+  bar shows "Settings changed – restart to use them" until the app
+  restarts; **Restart the app now** closes the app and starts it again
+  (refused while measuring, analyzing or in the baseline wizard).
+- **Files.** The shipped `f20.ini` next to `f20app` holds the defaults with
+  comments and is never written by the app. The Settings screen saves only
+  the changed values to `C:\ProgramData\Greystone\f20app.ini`; a value
+  in that file wins over `f20.ini`. Passwords in it are encrypted for this
+  PC (Windows DPAPI, machine scope): a copied file is useless elsewhere,
+  but a local administrator can still read them.
+- Settings that rarely change (timeouts, database file, keep-alive,
+  per-recipe baseline profiles) stay in `f20.ini` only.
 
 ## 7. Behavior rules
 
@@ -579,9 +633,14 @@ One repository, one top-level CMake project, opened in Qt Creator 6:
 - Deployment: `f20app` via `windeployqt` to its own folder;
   `f20bridge.exe` + its config copied **into the FILMeasure folder**;
   `f20app` autostarts with Windows and launches the bridge.
-- Config: one `f20.ini` next to `f20app` (bridge port, expected channel
-  serial, recipe folder path, baseline thresholds per recipe, MQTT broker
-  host/port + credentials, showGui flag).
+- Config: `f20.ini` next to `f20app` holds the defaults (bridge port,
+  expected channel serial, recipe folder path, baseline thresholds per
+  recipe, MQTT broker, TLS, timeouts, showGui flag). Changes made in the
+  Settings screen (§6.7) go to `C:\ProgramData\Greystone\f20app.ini`;
+  the installer creates that folder writable for the users who run
+  `f20app`.
+- MQTT over TLS needs Paho built with OpenSSL (vcpkg:
+  `paho-mqttpp3[ssl]`).
 
 ## 9. Open items — must be checked on the NUC before coding the bridge
 
@@ -596,7 +655,7 @@ One repository, one top-level CMake project, opened in Qt Creator 6:
 | 7 | Real measure cycle time with our recipe | stopwatch in FIRemoteTest | auto-cycle rate, command timeouts |
 | 8 | Qt Creator + CMake builds the `/clr` target | try on the NUC | §8 fallback decision |
 | 9 | Our unit's spec configuration | config sheet / serial | which spec table applies (2011 manual: 15 nm–100 µm, 0.4 %/2 nm · 2025 datasheet: 15 nm–70 µm, 0.2 %/2 nm) |
-| 10 | Broker host, MQTT version, credentials/TLS | ask IT | `[mqtt]` settings in `f20.ini` (library decided: Eclipse Paho MQTT C++) |
+| 10 | Broker host, MQTT version, credentials/TLS | ask IT | values in the Settings screen §6.7 (library decided: Eclipse Paho MQTT C++, TLS supported) |
 | 14 | Company MQTT conventions for the F20 | agree with the server team | topic names and envelope details (§6.6) |
 
 ## 10. Acceptance tests (bench, with the F20 connected)

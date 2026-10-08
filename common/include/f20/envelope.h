@@ -8,7 +8,7 @@
 
 namespace f20 {
 
-// The company MQTT message format (spec 8.2): two topics per machine and
+// The company MQTT message format (spec 6.6): two topics per machine and
 // one JSON envelope. Every key on the wire is snake_case; the mapping from
 // our camelCase types lives here and nowhere else.
 //
@@ -40,7 +40,7 @@ std::string bareSerial(const std::string& serial);
 std::string sendTopic(const std::string& serial);    // "09A006/ar/f20/send"
 std::string receiveTopic(const std::string& serial); // "09A006/ar/f20/receive"
 
-// What a stored result carries beside its layers (spec 8.2.5.2).
+// What a stored result carries beside its layers (spec 6.6.5.2).
 struct ResultFacts {
     std::string resultId;
     std::string measuredAtUtc; // isoUtc()
@@ -48,7 +48,7 @@ struct ResultFacts {
     std::string sampleId;
     std::string operatorName;
     std::optional<int> baselineAgeMinutes;
-    std::string reanalyzedFrom; // result id or spectrum file; "" for a measurement
+    std::string reanalyzedFrom; // result id of the original; "" for a measurement
 };
 
 // The data of a result message and of a successful measure response:

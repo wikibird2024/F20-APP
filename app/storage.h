@@ -19,12 +19,13 @@ struct MeasurementRecord {
     QString sampleId;
     QString spectrumFile;   // empty when the spectrum was not saved
     QString reanalyzedFrom; // spectrum file a re-analysis was made from
+    QString reanalyzedFromResultId; // the stored result owning that file; "" if none
     std::optional<QDateTime> baselineCommittedAtUtc; // empty for a re-analysis
     QString appVersion;
     QString bridgeVersion;
 };
 
-// One stored result with its layers, as get_results sends it (spec 8.2.5.4).
+// One stored result with its layers, as get_results sends it (spec 6.6.5.6).
 struct StoredResult {
     QString resultId;
     QString timeUtc; // as stored: 2026-10-07T08:15:30.120Z
@@ -33,6 +34,7 @@ struct StoredResult {
     QString operatorName;
     QString spectrumFile;
     QString reanalyzedFrom;
+    QString reanalyzedFromResultId;
     std::optional<int> baselineAgeMinutes;
     f20::MeasureResult result; // layers, gof, passed (no summary)
 };
@@ -48,7 +50,7 @@ class Storage {
 public:
     // Kept in PRAGMA user_version. open() upgrades older files step by step
     // and refuses newer ones (QCoDeS: dataset/sqlite/db_upgrades).
-    static constexpr int kSchemaVersion = 2;
+    static constexpr int kSchemaVersion = 3;
 
     bool open(const QString& dbPath);
     bool isOpen() const { return isOpen_; }
@@ -78,12 +80,15 @@ public:
 
     // Sample id of the measurement that saved this spectrum file.
     std::optional<QString> sampleIdForSpectrum(const QString& spectrumFile);
+    // Result id of the measurement that saved this spectrum file.
+    std::optional<QString> resultIdForSpectrum(const QString& spectrumFile);
 
     QSqlDatabase& database() { return db_; }
 
 private:
     bool exec(const QString& sql);
     bool migrate();
+    bool upgrade(int toVersion, const char* const* first, const char* const* last);
     bool fail(const QString& message);
 
     QSqlDatabase db_;

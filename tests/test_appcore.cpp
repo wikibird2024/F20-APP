@@ -5,6 +5,7 @@
 #include "filenames.h"
 #include "measuregate.h"
 #include "recipelimits.h"
+#include "unlockguard.h"
 #include "warmup.h"
 
 using namespace f20app;
@@ -306,13 +307,42 @@ TEST_CASE("startup baseline: restore, offer recovery, or run the wizard") {
 }
 
 TEST_CASE("server names: machine_status per state, error code per refusal") {
-    CHECK(std::string(machineStatus(AppState::Ready)) == "Ready");
-    CHECK(std::string(machineStatus(AppState::NoBaseline)) == "NoBaseline");
-    CHECK(std::string(machineStatus(AppState::Fault)) == "Fault");
+    CHECK(std::string(machineStatus(AppState::Ready)) == "ready");
+    CHECK(std::string(machineStatus(AppState::NoBaseline)) == "noBaseline");
+    CHECK(std::string(machineStatus(AppState::Fault)) == "fault");
     CHECK(std::string(serverErrorCode(Refusal::noBaseline)) == "measureNotReady");
     CHECK(std::string(serverErrorCode(Refusal::baselineStale)) == "baselineStale");
     CHECK(std::string(serverErrorCode(Refusal::baselineWizardOpen)) == "busy");
     CHECK(std::string(serverErrorCode(Refusal::busy)) == "busy");
     CHECK(std::string(serverErrorCode(Refusal::fault)) == "bridgeFault");
     CHECK(std::string(serverErrorCode(Refusal::storageDown)) == "storageDown");
+}
+
+TEST_CASE("settings lock: wait after 5 wrong passwords, lock again when idle") {
+    UnlockGuard guard;
+    const UnlockGuard::Clock::time_point t0{};
+    CHECK_FALSE(guard.isUnlocked(t0));
+
+    for (int i = 0; i < 4; ++i)
+        guard.wrongPassword(t0);
+    CHECK(guard.waitSeconds(t0) == 0); // 4 wrong: no wait yet
+    guard.wrongPassword(t0 + 1s);
+    CHECK(guard.waitSeconds(t0 + 1s) == 30);
+    CHECK(guard.waitSeconds(t0 + 30s) == 1);
+    CHECK(guard.waitSeconds(t0 + 31s) == 0);
+    guard.wrongPassword(t0 + 40s); // still wrong after the wait: wait again
+    CHECK(guard.waitSeconds(t0 + 40s) == 30);
+
+    guard.unlocked(t0 + 80s); // the right one resets the count
+    CHECK(guard.waitSeconds(t0 + 80s) == 0);
+    CHECK(guard.isUnlocked(t0 + 80s));
+    guard.touched(t0 + 80s + 9min);
+    CHECK(guard.isUnlocked(t0 + 80s + 18min)); // 9 min after the last input
+    CHECK_FALSE(guard.isUnlocked(t0 + 80s + 19min));
+    guard.touched(t0 + 80s + 20min); // input on a locked screen does not unlock it
+    CHECK_FALSE(guard.isUnlocked(t0 + 80s + 20min));
+
+    guard.unlocked(t0 + 2h);
+    guard.lock();
+    CHECK_FALSE(guard.isUnlocked(t0 + 2h));
 }

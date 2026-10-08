@@ -2,7 +2,7 @@
 # Build:   ./tool/build.sh [Debug|Release|asan]  (configure + build + verify)
 # Tests:   ctest --preset Debug
 cmake_minimum_required(VERSION 3.22)
-project(f20software VERSION 0.1.0 LANGUAGES CXX)
+project(f20software VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

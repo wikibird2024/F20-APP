@@ -10,7 +10,7 @@
 #include <map>
 #include <optional>
 
-// ServerLink over MQTT in the company format (spec 8.2): every message is
+// ServerLink over MQTT in the company format (spec 6.6): every message is
 // the envelope of f20/envelope.h on {serial}/ar/f20/send (ours) or
 // .../receive (the server's).
 //
@@ -33,7 +33,7 @@ class MqttServerLink : public ServerLink
   public:
     struct Settings {
         QString                 serial; // as in f20.ini, e.g. "F20:09A006"
-        MqttTransport::Settings broker; // host, port, login; client id and Last Will are filled in here
+        MqttTransport::Settings broker; // host, port, login, TLS; Last Will (and client id when empty) filled in here
         int                     statusIntervalMs = 1000;
         int                     ackTimeoutMs = 5000;
         int                     ackRetries = 3; // sends after the first one
@@ -85,7 +85,10 @@ class MqttServerLink : public ServerLink
     void resend(const QString &transactionId);
     void onAckTimeout(const QString &transactionId);
     void reply(const QString &transactionId, const QString &command, const char *commandType, f20::json data);
-    void rejectRequest(const QString &transactionId, const QString &command, const QString &why);
+    void rejectRequest(const QString &transactionId,
+                       const QString &command,
+                       const QString &why,
+                       const char    *errorCode = "badRequest");
     void setState(ServerConnection state);
     void onConnected();
     void onMessage(const QString &topic, const QByteArray &payload);

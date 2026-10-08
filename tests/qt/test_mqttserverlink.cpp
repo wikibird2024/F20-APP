@@ -96,7 +96,19 @@ class MqttServerLinkTest : public QObject
         const auto will = f20::json::parse(fixture.transport->settings().willPayload.toStdString());
         QCOMPARE(text(will, "command"), std::string("status"));
         QCOMPARE(text(will, "machine_sn"), std::string("SIM001"));
-        QCOMPARE(will["data"]["machine_status"].get<std::string>(), std::string("Offline"));
+        QCOMPARE(will["data"]["machine_status"].get<std::string>(), std::string("offline"));
+    }
+
+    void clientIdFromTheSettingsScreenWins()
+    {
+        auto                    *transport = new FakeMqttTransport;
+        MqttServerLink::Settings settings;
+        settings.serial = "F20:SIM001";
+        settings.broker.host = "192.0.2.1";
+        settings.broker.clientId = "f20-line2";
+        MqttServerLink link(transport, settings);
+        link.start();
+        QCOMPARE(transport->settings().clientId, QString("f20-line2"));
     }
 
     void stateFollowsTheConnection()
@@ -247,6 +259,25 @@ class MqttServerLinkTest : public QObject
         QVERIFY(fixture.message(0) == fixture.message(1));
     }
 
+    void lastHundredAnswersAreKept()
+    {
+        Fixture    fixture;
+        QSignalSpy measure(&fixture.link, &ServerLink::remoteMeasureRequested);
+        fixture.startConnected();
+        for (int i = 0; i <= 100; ++i) { // 101 answers: the first one is forgotten
+            const QString id = QString("k%1").arg(i);
+            fixture.serverSends("measure", "request", id.toStdString());
+            fixture.link.sendResponse(id, "measure", {{"result_id", "r"}});
+        }
+        QCOMPARE(measure.count(), 101);
+
+        fixture.serverSends("measure", "request", "k1"); // still kept: answered again
+        QCOMPARE(measure.count(), 101);
+        QCOMPARE(text(fixture.lastMessage(), "transaction_id"), std::string("k1"));
+        fixture.serverSends("measure", "request", "k0"); // forgotten: runs again
+        QCOMPARE(measure.count(), 102);
+    }
+
     void badRequestsGetAnErrorNotACrash()
     {
         Fixture    fixture;
@@ -254,7 +285,7 @@ class MqttServerLinkTest : public QObject
         fixture.startConnected();
 
         fixture.serverSends("reboot", "request", "u1");
-        QCOMPARE(fixture.lastMessage()["data"]["error"].get<std::string>(), std::string("badRequest"));
+        QCOMPARE(fixture.lastMessage()["data"]["error"].get<std::string>(), std::string("unknownCommand"));
 
         fixture.serverSends("measure", "request", "u2", {{"recipe_name", 5}});
         QCOMPARE(text(fixture.lastMessage(), "transaction_id"), std::string("u2"));

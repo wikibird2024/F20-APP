@@ -22,7 +22,7 @@ enum class ErrorCode {
 const char* toString(ErrorCode code);
 std::optional<ErrorCode> errorCodeFromString(const std::string& text);
 
-// The plain sentence shown to the operator (spec §8.2).
+// The plain sentence shown to the operator (spec §5.2).
 // `detail` fills the placeholder where a message has one (recipe name).
 std::string operatorMessage(ErrorCode code, const std::string& detail = {});
 

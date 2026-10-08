@@ -78,10 +78,54 @@ private slots:
 
         Storage storage;
         QVERIFY(storage.open(path));
-        QCOMPARE(scalar(storage.database(), "PRAGMA user_version").toInt(), 2);
+        QCOMPARE(scalar(storage.database(), "PRAGMA user_version").toInt(),
+                 Storage::kSchemaVersion);
         QCOMPARE(scalar(storage.database(), "SELECT COUNT(*) FROM measurements").toInt(), 1);
         QVERIFY(scalar(storage.database(), "SELECT resultId FROM measurements").isNull());
         QVERIFY(storage.insertMeasurement(twoLayers(80.0), minimalRecord()).has_value());
+    }
+
+    // Version 2 stored only the file a re-analysis came from; version 3
+    // adds the original's result id for the server, also for old rows.
+    void reanalysisGetsTheOriginalResultId() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("f20.db");
+        QString originalId;
+        {
+            Storage storage;
+            QVERIFY(storage.open(path));
+            MeasurementRecord original = minimalRecord();
+            original.spectrumFile = "spectra/a.csv";
+            originalId = storage.insertMeasurement(twoLayers(80.0), original).value_or("");
+            QVERIFY(!originalId.isEmpty());
+            QCOMPARE(storage.resultIdForSpectrum("spectra/a.csv").value_or(""), originalId);
+            QVERIFY(!storage.resultIdForSpectrum("spectra/other.csv").has_value());
+
+            MeasurementRecord reanalysis = minimalRecord();
+            reanalysis.reanalyzedFrom = "spectra/a.csv";
+            reanalysis.reanalyzedFromResultId = originalId;
+            QVERIFY(storage.insertMeasurement(twoLayers(81.0), reanalysis).has_value());
+            const ResultPage page = storage.resultsSince({}, 0, 10);
+            QCOMPARE(page.results.size(), size_t(2));
+            QCOMPARE(page.results[1].reanalyzedFromResultId, originalId);
+
+            // Turn it back into a version 2 file: the id is not there yet.
+            QSqlQuery query(storage.database());
+            QVERIFY(query.exec("ALTER TABLE measurements DROP COLUMN reanalyzedFromResultId"));
+            QVERIFY(query.exec("PRAGMA user_version = 2"));
+        }
+        Storage upgraded;
+        QVERIFY(upgraded.open(path));
+        QCOMPARE(scalar(upgraded.database(), "PRAGMA user_version").toInt(), 3);
+        QCOMPARE(scalar(upgraded.database(),
+                        "SELECT COUNT(*) FROM measurements WHERE reanalyzedFromResultId = '" +
+                            originalId + "'")
+                     .toInt(),
+                 2); // both layer rows of the re-analysis
+        QCOMPARE(scalar(upgraded.database(), "SELECT COUNT(*) FROM measurements"
+                                             " WHERE reanalyzedFromResultId IS NULL")
+                     .toInt(),
+                 2); // the original's own rows stay empty
     }
 
     void newerSchemaIsRefused() {

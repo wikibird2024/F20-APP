@@ -7,6 +7,7 @@ add_library(f20appcore STATIC
     filenames.cpp
     measuregate.cpp
     recipelimits.cpp
+    unlockguard.cpp
     warmup.cpp
 )
 target_include_directories(f20appcore PUBLIC .)
