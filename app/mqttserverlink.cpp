@@ -32,8 +32,7 @@ bool optionalString(const f20::json &data, const char *key, QString &out)
 } // namespace
 
 MqttServerLink::MqttServerLink(MqttTransport *transport, const Settings &settings, QObject *parent)
-    : ServerLink(parent), transport_(transport), settings_(settings),
-      machineSn_(f20::bareSerial(settings.serial.toStdString())),
+    : ServerLink(parent), transport_(transport), settings_(settings), machineSn_(f20::bareSerial(settings.serial.toStdString())),
       sendTopic_(fromStd(f20::sendTopic(settings.serial.toStdString()))),
       receiveTopic_(fromStd(f20::receiveTopic(settings.serial.toStdString())))
 {
@@ -74,7 +73,9 @@ QString MqttServerLink::newTransactionId()
     return fromStd(f20::makeTransactionId(transactionCounter_, std::chrono::system_clock::now()));
 }
 
-QByteArray MqttServerLink::envelope(const QString &command, const char *commandType, const QString &transactionId,
+QByteArray MqttServerLink::envelope(const QString   &command,
+                                    const char      *commandType,
+                                    const QString   &transactionId,
                                     const f20::json &data) const
 {
     f20::Envelope message;
@@ -121,13 +122,13 @@ void MqttServerLink::sendAwaitingAck(const QString &command, const f20::json &da
         const auto oldest = std::min_element(awaitingAck_.begin(), awaitingAck_.end(), [](const auto &a, const auto &b) {
             return a.second.order < b.second.order;
         });
-        emit logLine(QString("[mqtt] %1 %2 dropped unacknowledged - too many waiting")
-                         .arg(oldest->second.command, oldest->first));
+        emit       logLine(
+            QString("[mqtt] %1 %2 dropped unacknowledged - too many waiting").arg(oldest->second.command, oldest->first));
         oldest->second.timer->deleteLater();
         awaitingAck_.erase(oldest);
     }
     const QString transactionId = newTransactionId();
-    AwaitingAck entry;
+    AwaitingAck   entry;
     entry.command = command;
     entry.payload = envelope(command, "request", transactionId, data);
     entry.order = nextOrder_++;
@@ -181,8 +182,7 @@ void MqttServerLink::sendAck(const QString &transactionId, const QString &comman
 
 // Kept for duplicates even when it cannot be sent now: the server repeats
 // the request after a reconnect and then gets this reply.
-void MqttServerLink::reply(const QString &transactionId, const QString &command, const char *commandType,
-                           f20::json data)
+void MqttServerLink::reply(const QString &transactionId, const QString &command, const char *commandType, f20::json data)
 {
     if (!data.is_object())
         data = f20::json::object();
@@ -195,9 +195,8 @@ void MqttServerLink::reply(const QString &transactionId, const QString &command,
         answered_.pop_front();
 
     const std::string error = f20::stringAt(data, "error").value_or("");
-    emit logLine(QString("[mqtt] -> %1 %2 %3%4")
-                     .arg(fromStd(commandType), command, transactionId,
-                          error.empty() ? QString() : " error " + fromStd(error)));
+    emit              logLine(QString("[mqtt] -> %1 %2 %3%4")
+                     .arg(fromStd(commandType), command, transactionId, error.empty() ? QString() : " error " + fromStd(error)));
     if (!transport_->publish(sendTopic_, payload, 1))
         emit logLine(QString("[mqtt] %1 %2 NOT sent - no broker connection").arg(command, transactionId));
 }
@@ -248,11 +247,12 @@ void MqttServerLink::onMessage(const QString &topic, const QByteArray &payload)
         // Not an envelope - but if the server's transaction id is readable,
         // it learns why instead of waiting.
         const f20::json raw = f20::json::parse(payload.toStdString(), nullptr, false);
-        const auto transactionId = f20::stringAt(raw, "transaction_id");
-        const auto machineSn = f20::stringAt(raw, "machine_sn");
-        emit logLine(QString("[mqtt] unreadable message on %1 (%2 bytes)").arg(topic).arg(payload.size()));
+        const auto      transactionId = f20::stringAt(raw, "transaction_id");
+        const auto      machineSn = f20::stringAt(raw, "machine_sn");
+        emit            logLine(QString("[mqtt] unreadable message on %1 (%2 bytes)").arg(topic).arg(payload.size()));
         if (transactionId && (!machineSn || machineSn->empty() || *machineSn == machineSn_))
-            rejectRequest(fromStd(*transactionId), fromStd(f20::stringAt(raw, "command").value_or("unknown")),
+            rejectRequest(fromStd(*transactionId),
+                          fromStd(f20::stringAt(raw, "command").value_or("unknown")),
                           "not a valid company envelope");
         return;
     }

@@ -78,31 +78,31 @@ class MqttServerLink : public ServerLink
         quint64    order = 0; // to find the oldest
     };
 
-    QString    newTransactionId();
-    QByteArray envelope(const QString &command, const char *commandType, const QString &transactionId,
-                        const f20::json &data) const;
-    void       sendAwaitingAck(const QString &command, const f20::json &data);
-    void       resend(const QString &transactionId);
-    void       onAckTimeout(const QString &transactionId);
-    void       reply(const QString &transactionId, const QString &command, const char *commandType, f20::json data);
-    void       rejectRequest(const QString &transactionId, const QString &command, const QString &why);
-    void       setState(ServerConnection state);
-    void       onConnected();
-    void       onMessage(const QString &topic, const QByteArray &payload);
-    void       onRequest(const QString &transactionId, const QString &command, const f20::json &data);
+    QString newTransactionId();
+    QByteArray
+         envelope(const QString &command, const char *commandType, const QString &transactionId, const f20::json &data) const;
+    void sendAwaitingAck(const QString &command, const f20::json &data);
+    void resend(const QString &transactionId);
+    void onAckTimeout(const QString &transactionId);
+    void reply(const QString &transactionId, const QString &command, const char *commandType, f20::json data);
+    void rejectRequest(const QString &transactionId, const QString &command, const QString &why);
+    void setState(ServerConnection state);
+    void onConnected();
+    void onMessage(const QString &topic, const QByteArray &payload);
+    void onRequest(const QString &transactionId, const QString &command, const f20::json &data);
 
-    MqttTransport           *transport_;
-    Settings                 settings_;
-    std::string              machineSn_;
-    QString                  sendTopic_;
-    QString                  receiveTopic_;
-    ServerConnection         state_ = ServerConnection::connecting;
-    std::optional<f20::json> lastStatus_;
-    std::string              lastLoggedMachineStatus_;
-    QTimer                   statusTimer_;
-    int                      transactionCounter_ = 0;
-    quint64                  nextOrder_ = 0;
-    std::map<QString, AwaitingAck>              awaitingAck_;
-    QSet<QString>                               inProgress_; // requests received, not answered yet
+    MqttTransport                             *transport_;
+    Settings                                   settings_;
+    std::string                                machineSn_;
+    QString                                    sendTopic_;
+    QString                                    receiveTopic_;
+    ServerConnection                           state_ = ServerConnection::connecting;
+    std::optional<f20::json>                   lastStatus_;
+    std::string                                lastLoggedMachineStatus_;
+    QTimer                                     statusTimer_;
+    int                                        transactionCounter_ = 0;
+    quint64                                    nextOrder_ = 0;
+    std::map<QString, AwaitingAck>             awaitingAck_;
+    QSet<QString>                              inProgress_; // requests received, not answered yet
     std::deque<std::pair<QString, QByteArray>> answered_;   // last replies, for duplicates
 };

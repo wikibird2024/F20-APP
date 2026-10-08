@@ -49,11 +49,18 @@ struct Fixture {
     }
 
     // The server sends one envelope to the receive topic.
-    void serverSends(const std::string &command, const std::string &type, const std::string &transactionId,
-                     const f20::json &data = f20::json::object(), const std::string &machineSn = "SIM001")
+    void serverSends(const std::string &command,
+                     const std::string &type,
+                     const std::string &transactionId,
+                     const f20::json   &data = f20::json::object(),
+                     const std::string &machineSn = "SIM001")
     {
-        const f20::json message{{"command", command},     {"command_type", type},    {"data", data},
-                                {"machine_name", "AR"},   {"machine_sn", machineSn}, {"transaction_id", transactionId}};
+        const f20::json message{{"command", command},
+                                {"command_type", type},
+                                {"data", data},
+                                {"machine_name", "AR"},
+                                {"machine_sn", machineSn},
+                                {"transaction_id", transactionId}};
         transport->injectMessage("SIM001/ar/f20/receive", QByteArray::fromStdString(message.dump()));
     }
 };
@@ -209,8 +216,8 @@ class MqttServerLinkTest : public QObject
         Fixture    fixture;
         QSignalSpy measure(&fixture.link, &ServerLink::remoteMeasureRequested);
         fixture.startConnected();
-        fixture.serverSends("measure", "request", "0007-20261008-101500",
-                            {{"recipe_name", "SiO2 on Si"}, {"sample_id", "LOT42-07"}});
+        fixture.serverSends(
+            "measure", "request", "0007-20261008-101500", {{"recipe_name", "SiO2 on Si"}, {"sample_id", "LOT42-07"}});
         QCOMPARE(measure.count(), 1);
         QCOMPARE(measure.last().at(0).toString(), QString("0007-20261008-101500"));
         QCOMPARE(measure.last().at(1).toString(), QString("SiO2 on Si"));
