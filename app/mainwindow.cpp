@@ -540,6 +540,13 @@ void MainWindow::refreshDiagnostics() {
             f20::stringAt(reply.result, "filmeasure").value_or("?"));
         diagnosticsScreen_->setVersions(bridgeVersion_);
     });
+    // Signal health reads the spectrometer: not between the steps of a
+    // measurement, a re-analysis or a baseline.
+    if (!state_.canAnalyze()) {
+        diagnosticsScreen_->appendLog(QString("[diagnostics] signal health not read while %1")
+                                          .arg(f20app::toString(state_.state())));
+        return;
+    }
     bridge_.send("getDiagnostics", {}, this, [this](const f20::Reply& reply) {
         if (reply.ok)
             diagnosticsScreen_->setSignalHealth(
