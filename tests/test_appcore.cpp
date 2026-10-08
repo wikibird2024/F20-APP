@@ -1,6 +1,7 @@
 #include "doctest.h"
 #include "appstatemachine.h"
 #include "baselinetracker.h"
+#include "devicecheck.h"
 #include "filenames.h"
 #include "measuregate.h"
 
@@ -202,4 +203,14 @@ TEST_CASE("sample ids become safe file name parts") {
     CHECK(safeFileNamePart("A:B*?") == "A_B__");
     CHECK(safeFileNamePart("") == "sample");
     CHECK(safeFileNamePart(std::string(100, 'a')).size() == 40);
+}
+
+TEST_CASE("channel serial: same F20 despite case and spaces; another F20 is caught") {
+    CHECK_ENUM_EQ(checkChannelSerial("F20:09A006", "F20:09A006"), SerialCheck::ok);
+    CHECK_ENUM_EQ(checkChannelSerial(" f20:09a006 ", "F20:09A006\n"), SerialCheck::ok);
+    CHECK_ENUM_EQ(checkChannelSerial("F20:09A006", "F20:09A007"), SerialCheck::mismatch);
+    CHECK_ENUM_EQ(checkChannelSerial("F20:09A006", "F20:09A0061"), SerialCheck::mismatch);
+    CHECK_ENUM_EQ(checkChannelSerial("", "F20:09A006"), SerialCheck::notConfigured);
+    CHECK_ENUM_EQ(checkChannelSerial("  ", "F20:09A006"), SerialCheck::notConfigured);
+    CHECK_ENUM_EQ(checkChannelSerial("F20:09A006", ""), SerialCheck::missing);
 }

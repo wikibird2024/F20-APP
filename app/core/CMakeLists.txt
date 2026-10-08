@@ -3,6 +3,7 @@
 add_library(f20appcore STATIC
     appstatemachine.cpp
     baselinetracker.cpp
+    devicecheck.cpp
     filenames.cpp
     measuregate.cpp
 )

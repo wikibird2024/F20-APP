@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include "baselinewizard.h"
+#include "devicecheck.h"
 #include "diagnosticsscreen.h"
 #include "f20/errors.h"
 #include "f20/jsonread.h"
@@ -79,6 +80,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     bridge_.setTiming(timing);
     // Acquire and analyze can take much longer than a status request.
     measureTimeoutMs_ = settings_.value("bridge/measureTimeoutMs", 60000).toInt();
+    expectedSerial_ = settings_.value("device/serial").toString().trimmed();
 
     const QString databasePath =
         resolvePath(settings_.value("storage/database", "f20data.db").toString());
@@ -480,15 +482,47 @@ void MainWindow::onBridgeConnected() {
     state_.onBridgeUp();
     diagnosticsScreen_->setBridgeState("connected", true);
     bridge_.send("getStatus", {}, this, [this](const f20::Reply& reply) {
-        if (!reply.ok)
+        if (!reply.ok) {
+            if (reply.errorCode == "hardwareMissing")
+                enterDeviceFault(operatorText(reply));
             return;
-        channelSerial_ =
-            QString::fromStdString(f20::stringAt(reply.result, "channelSerial").value_or(""));
+        }
+        const std::string reported = f20::stringAt(reply.result, "channelSerial").value_or("");
+        switch (f20app::checkChannelSerial(expectedSerial_.toStdString(), reported)) {
+        case f20app::SerialCheck::ok:
+            break;
+        case f20app::SerialCheck::notConfigured:
+            qWarning().noquote() << "[device] no serial in f20.ini - the bridge's F20 is not checked";
+            break;
+        case f20app::SerialCheck::mismatch:
+        case f20app::SerialCheck::missing:
+            // Before channelSerial_ is set: no baseline of the wrong F20 is restored.
+            enterDeviceFault(QString("Wrong F20: f20.ini expects %1, the bridge reports %2 - "
+                                     "check [device] serial")
+                                 .arg(expectedSerial_,
+                                      reported.empty() ? QString("no serial")
+                                                       : QString::fromStdString(reported)));
+            return;
+        }
+        channelSerial_ = QString::fromStdString(reported);
         if (f20::boolAt(reply.result, "baselineValid").value_or(false))
             restoreBaselineAge();
         updateStatusBar();
     });
     refreshDiagnostics();
+}
+
+// The bridge is up, but not with a usable F20 for this app: Fault, so
+// nothing measures, and the operator and the server learn why. A reconnect
+// (Diagnostics) runs the check again.
+void MainWindow::enterDeviceFault(const QString& message) {
+    state_.onBridgeDown();
+    measureScreen_->showError(message);
+    diagnosticsScreen_->setBridgeState(message, false);
+    diagnosticsScreen_->appendLog("[device] " + message);
+    qCritical().noquote() << "[device]" << message;
+    serverLink_->publishAlarm("bridgeFault", {{"message", message.toStdString()}});
+    updateStatusBar();
 }
 
 // FILMeasure says a baseline exists, but not how old it is. The age comes

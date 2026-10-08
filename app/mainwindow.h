@@ -49,6 +49,7 @@ private:
     bool storeResult(const f20::MeasureResult& result, MeasurementRecord record);
     void runBaselineWizard();
     void onBridgeConnected();
+    void enterDeviceFault(const QString& message);
     void restoreBaselineAge();
     void checkBaselineAge();
     void invalidateBaseline(const QString& reason);
@@ -78,6 +79,7 @@ private:
     QLabel* serverLabel_;
     QTimer autoCycleTimer_;
     QTimer ageTimer_;
-    QString channelSerial_;
+    QString expectedSerial_; // [device] serial in f20.ini
+    QString channelSerial_;  // what the bridge reports
     QString bridgeVersion_;
 };
