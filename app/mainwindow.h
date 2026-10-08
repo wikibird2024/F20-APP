@@ -3,6 +3,7 @@
 #include "baselinetracker.h"
 #include "bridgeclient.h"
 #include "measuregate.h"
+#include "recipelimits.h"
 #include "storage.h"
 
 #include <QDir>
@@ -51,7 +52,9 @@ private:
     void onBridgeConnected();
     void enterDeviceFault(const QString& message);
     void restoreBaselineAge();
-    void checkBaselineAge();
+    void loadRecipeLimits();
+    void applyRecipeLimits(const QString& recipe);
+    void syncBaselineState();
     void invalidateBaseline(const QString& reason);
     void refreshDiagnostics();
     void updateMeasurePermission();
@@ -67,6 +70,8 @@ private:
     BridgeClient bridge_;
     f20app::AppStateMachine state_;
     f20app::BaselineTracker baseline_;
+    f20app::RecipeLimits recipeLimits_;
+    QString limitsRecipe_; // recipe whose limits the tracker uses now
     Storage storage_;
     ServerLink* serverLink_ = nullptr;
     QPointer<BaselineWizard> baselineWizard_; // null when no wizard is open

@@ -72,8 +72,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     if (!QFileInfo::exists(configPath))
         qWarning().noquote() << "config file not found:" << configPath << "- using defaults";
 
-    baseline_.setThresholds(settings_.value("baseline/warnMinutes", 20).toInt(),
-                            settings_.value("baseline/blockMinutes", 30).toInt());
+    loadRecipeLimits();
     BridgeClient::Timing timing;
     timing.requestTimeoutMs =
         settings_.value("bridge/timeoutMs", timing.requestTimeoutMs).toInt();
@@ -196,10 +195,15 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     connect(serverLink_, &ServerLink::remoteBaselineInvalidate, this,
             [this] { invalidateBaseline("remote command"); });
 
+    // The recipe decides the baseline limits (spec 2.2 #3). setRecipes()
+    // ran before this connect, so apply the first recipe by hand.
+    connect(measureScreen_, &MeasureScreen::recipeChanged, this, &MainWindow::applyRecipeLimits);
+    applyRecipeLimits(measureScreen_->currentRecipe());
+
     // Baseline age watchdog (spec §6.2): stale blocks measuring + alarm.
     ageTimer_.start(5000);
     connect(&ageTimer_, &QTimer::timeout, this, [this] {
-        checkBaselineAge();
+        syncBaselineState();
         updateMeasurePermission();
         updateStatusBar();
     });
@@ -290,7 +294,8 @@ std::optional<f20app::Refusal> MainWindow::measureRefusal() const {
 }
 
 void MainWindow::startMeasurement(Trigger trigger) {
-    checkBaselineAge(); // right now, not at the next timer tick
+    // This recipe's limits, right now - not at the next timer tick.
+    applyRecipeLimits(measureScreen_->currentRecipe());
     if (const auto refusal = measureRefusal()) {
         const QString text = f20app::operatorText(*refusal);
         if (trigger == Trigger::autoCycle) {
@@ -470,7 +475,7 @@ void MainWindow::runBaselineWizard() {
             baseline_.invalidate();
         }
         state_.onBaselineWizardClosed(committedAt.has_value());
-        checkBaselineAge(); // a wizard left open after the commit ages too
+        syncBaselineState(); // a wizard left open after the commit ages too
         updateMeasurePermission();
         updateStatusBar();
     });
@@ -538,19 +543,97 @@ void MainWindow::restoreBaselineAge() {
     }
     baseline_.committed(toTimePoint(*committedAt));
     state_.onBaselineValid();
-    checkBaselineAge();
+    syncBaselineState();
     diagnosticsScreen_->appendLog("[baseline] restored, committed " +
                                   committedAt->toLocalTime().toString(Qt::ISODate));
 }
 
-// Stale blocks measuring (spec §6.2). Run by the age timer AND at every
-// measure trigger, so there is no window between timer ticks.
-void MainWindow::checkBaselineAge() {
-    if (baseline_.status() == f20app::BaselineStatus::Stale &&
-        state_.state() == f20app::AppState::Ready) {
+// Stale blocks measuring (spec §6.2); a recipe with longer limits makes the
+// same baseline valid again. Run by the age timer, on a recipe change AND at
+// every measure trigger, so there is no window between timer ticks.
+void MainWindow::syncBaselineState() {
+    switch (f20app::baselineChange(state_.state(), baseline_.status())) {
+    case f20app::BaselineChange::nowStale:
         state_.onBaselineInvalid();
         serverLink_->publishAlarm("baselineStale", {});
+        break;
+    case f20app::BaselineChange::nowValid:
+        state_.onBaselineValid();
+        diagnosticsScreen_->appendLog("[baseline] within the limits of '" + limitsRecipe_ +
+                                      "' - measuring allowed again");
+        break;
+    case f20app::BaselineChange::none:
+        break;
     }
+}
+
+// Baseline limits per recipe (spec 2.2 #3): [baseline] holds the defaults,
+// each [baselineProfile_<name>] a group of recipes with its own limits; a
+// key missing in a profile falls back to the default.
+void MainWindow::loadRecipeLimits() {
+    f20app::BaselineLimits defaults;
+    defaults.warnMinutes = settings_.value("baseline/warnMinutes", defaults.warnMinutes).toInt();
+    defaults.blockMinutes = settings_.value("baseline/blockMinutes", defaults.blockMinutes).toInt();
+    defaults.warmUpMinutes =
+        settings_.value("baseline/warmUpMinutes", defaults.warmUpMinutes).toInt();
+    if (const auto problem = f20app::checkLimits(defaults)) {
+        qWarning().noquote() << "[baseline] defaults in f20.ini not usable:"
+                             << QString::fromStdString(*problem) << "- using 20/30/15 min";
+        defaults = {};
+    }
+    recipeLimits_ = f20app::RecipeLimits(defaults);
+
+    const QString prefix = "baselineProfile_";
+    for (const QString& group : settings_.childGroups()) {
+        if (!group.startsWith(prefix))
+            continue;
+        f20app::LimitProfile profile;
+        profile.name = group.mid(prefix.size()).toStdString();
+        settings_.beginGroup(group);
+        for (const QString& recipe : settings_.value("recipes").toStringList())
+            if (!recipe.trimmed().isEmpty())
+                profile.recipes.push_back(recipe.trimmed().toStdString());
+        profile.limits.warnMinutes = settings_.value("warnMinutes", defaults.warnMinutes).toInt();
+        profile.limits.blockMinutes = settings_.value("blockMinutes", defaults.blockMinutes).toInt();
+        profile.limits.warmUpMinutes =
+            settings_.value("warmUpMinutes", defaults.warmUpMinutes).toInt();
+        settings_.endGroup();
+        if (const auto problem = f20app::checkLimits(profile.limits)) {
+            qWarning().noquote() << "[baseline]" << group << "skipped:"
+                                 << QString::fromStdString(*problem);
+            continue;
+        }
+        if (profile.recipes.empty()) {
+            qWarning().noquote() << "[baseline]" << group << "skipped: no recipes listed";
+            continue;
+        }
+        recipeLimits_.addProfile(std::move(profile));
+    }
+    for (const std::string& recipe : recipeLimits_.recipesInSeveralProfiles())
+        qWarning().noquote() << "[baseline] recipe" << QString::fromStdString(recipe)
+                             << "is in several profiles - using"
+                             << QString::fromStdString(recipeLimits_.profileFor(recipe))
+                             << "(first in name order)";
+}
+
+// The current recipe decides the baseline limits: applied when the
+// operator picks a recipe and again right before each measurement.
+void MainWindow::applyRecipeLimits(const QString& recipe) {
+    const f20app::BaselineLimits limits = recipeLimits_.forRecipe(recipe.toStdString());
+    baseline_.setThresholds(limits.warnMinutes, limits.blockMinutes);
+    if (recipe != limitsRecipe_) {
+        limitsRecipe_ = recipe;
+        const QString line =
+            QString("[baseline] limits for '%1' (%2): yellow after %3 min, red after %4 min")
+                .arg(recipe, QString::fromStdString(recipeLimits_.profileFor(recipe.toStdString())))
+                .arg(limits.warnMinutes)
+                .arg(limits.blockMinutes);
+        diagnosticsScreen_->appendLog(line);
+        qInfo().noquote() << line;
+    }
+    syncBaselineState();
+    updateMeasurePermission();
+    updateStatusBar();
 }
 
 // Stored as invalid too, so a reconnect cannot bring this baseline back.
@@ -610,6 +693,11 @@ void MainWindow::updateStatusBar() {
     }
     baselineLabel_->setText(text);
     baselineLabel_->setStyleSheet("color: " + color + ";");
+    const f20app::BaselineLimits limits = recipeLimits_.forRecipe(limitsRecipe_.toStdString());
+    baselineLabel_->setToolTip(QString("limits for '%1': yellow after %2 min, red after %3 min")
+                                   .arg(limitsRecipe_)
+                                   .arg(limits.warnMinutes)
+                                   .arg(limits.blockMinutes));
 }
 
 void MainWindow::publishStatus() {
