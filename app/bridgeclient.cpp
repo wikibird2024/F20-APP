@@ -131,15 +131,22 @@ void BridgeClient::onStateChanged(QAbstractSocket::SocketState state)
     scheduleReconnect();
 }
 
+// The written request first, then the queue in send order. Both are moved
+// out before any handler runs: the socket is already down, so a send() from
+// a handler gets its own "not connected" error instead of joining the queue.
 void BridgeClient::failAllPending(const QString &message)
 {
     auto pending = std::move(pending_);
     pending_.clear();
+    auto queued = std::move(queue_);
+    queue_.clear();
     for (auto &[id, entry] : pending) {
         entry.timeout->deleteLater();
         if (!entry.isHeartbeat)
             deliver(entry, f20::errorReply(id, "filmeasureError", message.toStdString()));
     }
+    for (const Queued &request : queued)
+        deliver(request.pending, f20::errorReply(request.id, "filmeasureError", message.toStdString()));
 }
 
 // Runs a handler only while its context lives, and never lets an
@@ -162,13 +169,7 @@ void BridgeClient::send(const QString &cmd, const f20::json &params, QObject *co
     Pending pending;
     pending.handler = std::move(onReply);
     pending.context = context;
-    sendRequest(cmd, params, std::move(pending), timeoutMs > 0 ? timeoutMs : timing_.requestTimeoutMs);
-}
-
-void BridgeClient::sendRequest(const QString &cmd, const f20::json &params, Pending pending, int timeoutMs)
-{
-    const int id = nextId_;
-    nextId_ = nextId_ == INT_MAX ? 1 : nextId_ + 1;
+    Queued request = makeRequest(cmd, params, std::move(pending), timeoutMs > 0 ? timeoutMs : timing_.requestTimeoutMs);
 
     if (!isConnected()) {
         // Posted, never called inside send(): the caller may be halfway
@@ -176,29 +177,61 @@ void BridgeClient::sendRequest(const QString &cmd, const f20::json &params, Pend
         // same way, languageclient/client.cpp).
         QMetaObject::invokeMethod(
             this,
-            [this, id, pending] { deliver(pending, f20::errorReply(id, "filmeasureError", "bridge not connected")); },
+            [this, id = request.id, pending = request.pending] {
+                deliver(pending, f20::errorReply(id, "filmeasureError", "bridge not connected"));
+            },
             Qt::QueuedConnection);
         return;
     }
+    queue_.push_back(std::move(request));
+    sendNext();
+}
 
+int BridgeClient::takeId()
+{
+    const int id = nextId_;
+    nextId_ = nextId_ == INT_MAX ? 1 : nextId_ + 1;
+    return id;
+}
+
+BridgeClient::Queued BridgeClient::makeRequest(const QString &cmd, const f20::json &params, Pending pending, int timeoutMs)
+{
     f20::Request request;
-    request.id = id;
+    request.id = takeId();
     request.cmd = cmd.toStdString();
     if (params.is_object())
         request.params = params;
-    const std::string line = f20::serialize(request);
+    return Queued{request.id, f20::serialize(request), std::move(pending), timeoutMs};
+}
 
+// One request on the wire at a time (spec 2.1 #6): FILMeasure does one
+// thing at a time, and the real bridge answers a second command with busy.
+void BridgeClient::sendNext()
+{
+    if (!isConnected() || !pending_.empty() || queue_.empty())
+        return;
+    Queued request = std::move(queue_.front());
+    queue_.pop_front();
+    writeRequest(std::move(request));
+}
+
+void BridgeClient::writeRequest(Queued request)
+{
+    const int id = request.id;
+    Pending pending = std::move(request.pending);
+    // The timeout counts from now, not from send(): time spent waiting in
+    // the queue is not the bridge's fault.
     pending.timeout = new QTimer(this);
     pending.timeout->setSingleShot(true);
     connect(pending.timeout, &QTimer::timeout, this, [this, id] { onRequestTimeout(id); });
-    pending.timeout->start(timeoutMs);
+    pending.timeout->start(request.timeoutMs);
     const bool isHeartbeat = pending.isHeartbeat;
     pending_[id] = std::move(pending);
 
-    socket_.write(line.data(), static_cast<qint64>(line.size()));
+    socket_.write(request.line.data(), static_cast<qint64>(request.line.size()));
     socket_.write("\n", 1);
     if (!isHeartbeat) // every 10 s - would bury the real traffic in the log
-        emit protocolLog("-> " + logText(line));
+        emit protocolLog("-> " + logText(request.line));
 }
 
 void BridgeClient::onRequestTimeout(int id)
@@ -214,7 +247,9 @@ void BridgeClient::onRequestTimeout(int id)
         if (++heartbeatMisses_ > timing_.heartbeatMissesAllowed) {
             emit protocolLog("[heartbeat] bridge not answering - dropping the connection");
             socket_.abort();
+            return;
         }
+        sendNext(); // a request that arrived meanwhile waited for the heartbeat
         return;
     }
     // The bridge is hung or lost the request. Keeping the connection would
@@ -225,16 +260,16 @@ void BridgeClient::onRequestTimeout(int id)
     deliver(entry, f20::errorReply(id, "filmeasureError", "no reply from bridge (timeout)"));
 }
 
-// Only while nothing else is open: an open request has its own timeout, and
-// a single-threaded bridge would queue the heartbeat behind a long measure.
+// Only while nothing is open or waiting: an open request has its own
+// timeout, and the heartbeat must never jump the queue.
 void BridgeClient::sendHeartbeat()
 {
-    if (!isConnected() || !pending_.empty())
+    if (!isConnected() || !pending_.empty() || !queue_.empty())
         return;
     Pending pending;
     pending.isHeartbeat = true;
     pending.context = this;
-    sendRequest("getStatus", f20::json::object(), std::move(pending), timing_.heartbeatTimeoutMs);
+    writeRequest(makeRequest("getStatus", f20::json::object(), std::move(pending), timing_.heartbeatTimeoutMs));
 }
 
 void BridgeClient::onReadyRead()
@@ -273,6 +308,11 @@ void BridgeClient::handleLine(const std::string &line)
         entry.timeout->deleteLater();
         if (!entry.isHeartbeat)
             emit protocolLog("<- " + logText(line));
+        if (!reply->ok && reply->errorCode == "busy")
+            emit protocolLog(QString("[busy] id %1 refused - is a second client connected?").arg(reply->id));
+        // Next one out before this handler runs: a request the handler sends
+        // then waits behind the ones already queued.
+        sendNext();
         deliver(entry, *reply);
     } else if (const auto *event = std::get_if<f20::Event>(&incoming)) {
         emit protocolLog("<- " + logText(line));

@@ -7,6 +7,7 @@
 #include <QTcpSocket>
 #include <QTimer>
 
+#include <deque>
 #include <functional>
 #include <map>
 
@@ -20,6 +21,8 @@
 // - a timeout drops the connection, so a late reply can't be taken for a
 //   new one;
 // - reconnects back off exponentially with jitter;
+// - one request on the wire at a time (spec 2.1 #6); the others wait in
+//   send order, and each one's timeout starts when it is written;
 // - an idle connection is checked with a heartbeat;
 // - an oversized line drops the connection;
 // - nothing thrown inside escapes into Qt's event loop.
@@ -77,7 +80,18 @@ class BridgeClient : public QObject
         bool              isHeartbeat = false;
     };
 
-    void sendRequest(const QString &cmd, const f20::json &params, Pending pending, int timeoutMs);
+    // A request waiting for its turn; the id is given when it is queued.
+    struct Queued {
+        int         id = 0;
+        std::string line; // serialized request
+        Pending     pending;
+        int         timeoutMs = 0;
+    };
+
+    int  takeId();
+    Queued makeRequest(const QString &cmd, const f20::json &params, Pending pending, int timeoutMs);
+    void sendNext();
+    void writeRequest(Queued request);
     void deliver(const Pending &entry, const f20::Reply &reply);
     void handleLine(const std::string &line);
     void startConnect();
@@ -103,5 +117,6 @@ class BridgeClient : public QObject
     QTimer                 reconnectTimer_;
     QTimer                 stableTimer_;
     QTimer                 heartbeatTimer_;
-    std::map<int, Pending> pending_;
+    std::map<int, Pending> pending_; // written, waiting for the reply (at most one)
+    std::deque<Queued>     queue_;   // not written yet, in send order
 };
