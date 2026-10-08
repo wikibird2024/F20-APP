@@ -66,6 +66,8 @@ private:
     void logEvent(const QString& line);
     void onBridgeConnected();
     void enterDeviceFault(const QString& message);
+    void closeBaselineDialogs();
+    void onBridgeEvent(const QString& name, const f20::json& data);
     void restoreBaselineAge();
     void offerBaselineRecovery();
     void recoverBaseline();

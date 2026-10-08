@@ -149,16 +149,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     // Bridge wiring
     connect(&bridge_, &BridgeClient::connected, this, &MainWindow::onBridgeConnected);
     connect(&bridge_, &BridgeClient::disconnected, this, [this] {
-        // Close an open baseline wizard first, while the state is still
-        // Baselining: its finished handler then keeps a commit that already
-        // happened. Closed after the drop, the state would be Fault and the
-        // commit ignored - the app would stay in NoBaseline.
-        if (baselineWizard_)
-            baselineWizard_->reject();
-        // An open recovery offer is stale too: the reconnect asks again.
-        recoverableCommit_.reset();
-        if (recoverPrompt_)
-            recoverPrompt_->reject();
+        closeBaselineDialogs();
         // Forget the age: on reconnect it comes back from the bridge
         // ("baseline still valid?") and the database ("since when?").
         baseline_.invalidate();
@@ -175,10 +166,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
         diagnosticsScreen_->appendLog(line);
         qInfo().noquote() << "[bridge]" << line; // spec §7: every command and reply in the log file
     });
-    connect(&bridge_, &BridgeClient::eventReceived, this,
-            [this](const QString& name, const f20::json&) {
-                diagnosticsScreen_->appendLog("[event] " + name);
-            });
+    connect(&bridge_, &BridgeClient::eventReceived, this, &MainWindow::onBridgeEvent);
 
     // Measure screen wiring
     connect(measureScreen_, &MeasureScreen::measureRequested, this,
@@ -691,6 +679,51 @@ void MainWindow::onBridgeConnected() {
         updateStatusBar();
     });
     refreshDiagnostics();
+}
+
+// Before the app goes to Fault (bridge lost, FILMeasure died). The wizard
+// closes first, while the state is still Baselining: its finished handler
+// then keeps a commit that already happened - closed after the drop, the
+// state would be Fault and the commit ignored. An open recovery offer is
+// stale too: the reconnect asks again.
+void MainWindow::closeBaselineDialogs() {
+    if (baselineWizard_)
+        baselineWizard_->reject();
+    recoverableCommit_.reset();
+    if (recoverPrompt_)
+        recoverPrompt_->reject();
+}
+
+// Events the bridge pushes without a request (spec 5.4).
+void MainWindow::onBridgeEvent(const QString& name, const f20::json& data) {
+    if (name == "filmeasureDied") {
+        // Spec 7.1: FILMeasure crashed, so its active baseline is gone;
+        // nothing measures until it is back. The bridge exits and is
+        // restarted, which drops the connection: the reconnect finds no
+        // active baseline and offers recovery. A bridge that stayed
+        // connected would leave the app in Fault until "Reconnect bridge".
+        const QString message = QString("FILMeasure stopped (exit code %1)")
+                                    .arg(f20::intAt(data, "exitCode").value_or(-1));
+        closeBaselineDialogs();
+        baseline_.invalidate();
+        state_.onBridgeDown();
+        logEvent("[bridge] " + message);
+        measureScreen_->showError(message + " - waiting for the bridge to start it again");
+        serverLink_->publishAlarm("fault", {{"message", message.toStdString()}});
+        updateStatusBar();
+        return;
+    }
+    if (name == "startupWarning") {
+        // FILMeasure started, but e.g. its startup recipe did not load.
+        const QString warning = QString::fromStdString(f20::stringAt(data, "warning").value_or("warning"));
+        const QString detail = QString::fromStdString(f20::stringAt(data, "message").value_or(""));
+        const QString text = "FILMeasure startup warning: " + warning +
+                             (detail.isEmpty() ? QString() : " - " + detail);
+        logEvent("[bridge] " + text);
+        measureScreen_->showError(text);
+        return;
+    }
+    logEvent("[bridge] unknown event " + name);
 }
 
 // The bridge is up, but not with a usable F20 for this app: Fault, so

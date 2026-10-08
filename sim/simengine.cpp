@@ -44,6 +44,26 @@ std::optional<double> parseNumber(const std::string& text) {
 SimEngine::SimEngine(SimConfig config)
     : config_(std::move(config)), hasStoredBaseline_(config_.storedBaselineOnDisk) {}
 
+std::vector<f20::Event> SimEngine::eventsOnConnect() const {
+    if (!config_.startupWarning)
+        return {};
+    return {{"startupWarning",
+             {{"warning", "StartupRecipeLoadFailure"},
+              {"message", "the startup recipe could not be loaded"}}}};
+}
+
+std::vector<f20::Event> SimEngine::takeEvents() {
+    std::vector<f20::Event> events = std::move(events_);
+    events_.clear();
+    return events;
+}
+
+bool SimEngine::takeDropClient() {
+    const bool drop = dropClient_;
+    dropClient_ = false;
+    return drop;
+}
+
 double SimEngine::targetThicknessNm() const {
     if (auto it = forcedThicknessNm_.find(1); it != forcedThicknessNm_.end())
         return it->second;
@@ -184,7 +204,17 @@ Reply SimEngine::handle(const Request& request) {
                        "no baseline for spectrum acquisition");
         lastSpectrum_ = synthesizeSpectrum(targetThicknessNm());
         haveSpectrum_ = true;
-        return okReply(id, f20::toJson(lastSpectrum_));
+        const f20::Reply reply = okReply(id, f20::toJson(lastSpectrum_));
+        if (config_.filmeasureDiesAfter > 0 && ++acquisitions_ >= config_.filmeasureDiesAfter) {
+            // FILMeasure crashes after answering. Restarted, it has no active
+            // baseline - but the stored one can be recovered.
+            events_.push_back({"filmeasureDied", {{"exitCode", -1}}});
+            dropClient_ = true;
+            baselineCommitted_ = false;
+            haveSpectrum_ = false;
+            acquisitions_ = 0;
+        }
+        return reply;
     }
 
     if (cmd == "analyzeSpectrum") {

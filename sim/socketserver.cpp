@@ -60,6 +60,9 @@ void serveClient(int client, SimEngine &engine)
 {
     f20::LineSplitter splitter;
     char              buffer[4096];
+    for (const f20::Event &event : engine.eventsOnConnect())
+        if (!writeAll(client, f20::serialize(event) + "\n"))
+            return;
     for (;;) {
         const ssize_t n = ::read(client, buffer, sizeof buffer);
         if (n < 0 && errno == EINTR)
@@ -71,6 +74,13 @@ void serveClient(int client, SimEngine &engine)
                 continue;
             if (!writeAll(client, f20::serialize(answer(engine, line)) + "\n"))
                 return;
+            for (const f20::Event &event : engine.takeEvents())
+                if (!writeAll(client, f20::serialize(event) + "\n"))
+                    return;
+            if (engine.takeDropClient()) {
+                std::printf("FILMeasure \"died\" - closing the client like a restarting bridge\n");
+                return;
+            }
         }
         if (splitter.overflowed()) {
             const f20::Reply reply = f20::errorReply(0, "filmeasureError", "request line too long");

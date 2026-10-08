@@ -121,6 +121,33 @@ TEST_CASE("a baseline stored on disk is recovered without a commit in this run")
     CHECK(engine.handle(req(3, "getStatus")).result["baselineValid"].get<bool>());
 }
 
+TEST_CASE("events: startup warning on connect, FILMeasure dying after N acquisitions") {
+    f20sim::SimConfig config;
+    config.startupWarning = true;
+    config.filmeasureDiesAfter = 2;
+    SimEngine engine(config);
+    const auto onConnect = engine.eventsOnConnect();
+    REQUIRE(onConnect.size() == 1);
+    CHECK(onConnect[0].event == "startupWarning");
+
+    engine.handle(req(1, "setRecipe", {{"name", "SiO2 on Si"}}));
+    runBaseline(engine);
+    CHECK(engine.handle(req(2, "acquireSpectrum")).ok);
+    CHECK(engine.takeEvents().empty());
+    CHECK_FALSE(engine.takeDropClient());
+
+    CHECK(engine.handle(req(3, "acquireSpectrum")).ok); // answered, then it dies
+    const auto events = engine.takeEvents();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].event == "filmeasureDied");
+    CHECK(engine.takeDropClient());
+    CHECK_FALSE(engine.takeDropClient()); // once
+
+    // Restarted: no active baseline, but the stored one can be recovered.
+    CHECK_FALSE(engine.handle(req(4, "getStatus")).result["baselineValid"].get<bool>());
+    CHECK(engine.handle(req(5, "baselineRecover")).ok);
+}
+
 TEST_CASE("quit sets the flag that stops the server loop") {
     SimEngine engine;
     CHECK_FALSE(engine.quitRequested());

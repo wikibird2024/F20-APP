@@ -24,6 +24,11 @@ struct SimConfig {
     // Like FILMeasure restarted after a commit: no active baseline, but the
     // stored one can be recovered (f20bridge-sim --stored-baseline).
     bool storedBaselineOnDisk = false;
+    // Events (spec 5.4): a startupWarning for every client that connects
+    // (--startup-warning), and FILMeasure "dying" after this many spectrum
+    // acquisitions, 0 = never (--filmeasure-dies-after N).
+    bool startupWarning = false;
+    int filmeasureDiesAfter = 0;
 };
 
 class SimEngine {
@@ -32,6 +37,14 @@ public:
 
     f20::Reply handle(const f20::Request& request);
     bool quitRequested() const { return quitRequested_; }
+
+    // Events for a client that just connected (startupWarning).
+    std::vector<f20::Event> eventsOnConnect() const;
+    // Events to send after the reply just handled (filmeasureDied).
+    std::vector<f20::Event> takeEvents();
+    // True once after FILMeasure "died": the server closes the client, as
+    // the real bridge exits and is started again.
+    bool takeDropClient();
 
 private:
     f20::Reply measureReply(int id);
@@ -50,6 +63,9 @@ private:
     bool haveSpectrum_ = false;      // acquireSpectrum / openSpectrum ran
     f20::Spectrum lastSpectrum_;
     bool quitRequested_ = false;
+    int acquisitions_ = 0; // since FILMeasure last "started"
+    std::vector<f20::Event> events_;
+    bool dropClient_ = false;
 };
 
 } // namespace f20sim
