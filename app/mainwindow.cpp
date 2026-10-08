@@ -18,6 +18,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QFileInfo>
+#include <QInputDialog>
 #include <QLabel>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -73,6 +74,8 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
         qWarning().noquote() << "config file not found:" << configPath << "- using defaults";
 
     loadRecipeLimits();
+    // Power-on, as far as the software can tell: the app starts with Windows.
+    warmUp_.start();
     BridgeClient::Timing timing;
     timing.requestTimeoutMs =
         settings_.value("bridge/timeoutMs", timing.requestTimeoutMs).toInt();
@@ -99,13 +102,16 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
 
     auto* toolbar = addToolBar("main");
     toolbar->setMovable(false);
-    toolbar->addAction("Baseline...", this, &MainWindow::runBaselineWizard);
+    baselineAction_ = toolbar->addAction("Baseline...", this, &MainWindow::runBaselineWizard);
+    skipWarmUpAction_ = toolbar->addAction("Skip warm-up...", this, &MainWindow::skipWarmUp);
 
     stateLabel_ = new QLabel("starting");
     serverLabel_ = new QLabel;
     baselineLabel_ = new QLabel("baseline: none");
+    warmUpLabel_ = new QLabel;
     statusBar()->addWidget(stateLabel_);
     statusBar()->addPermanentWidget(serverLabel_);
+    statusBar()->addPermanentWidget(warmUpLabel_);
     statusBar()->addPermanentWidget(baselineLabel_);
 
     loadRecipes();
@@ -203,6 +209,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     // Baseline age watchdog (spec §6.2): stale blocks measuring + alarm.
     ageTimer_.start(5000);
     connect(&ageTimer_, &QTimer::timeout, this, [this] {
+        updateWarmUp();
         syncBaselineState();
         updateMeasurePermission();
         updateStatusBar();
@@ -454,6 +461,11 @@ void MainWindow::failReanalysis(const QString& operatorMessage) {
 }
 
 void MainWindow::runBaselineWizard() {
+    if (!warmUp_.isDone()) {
+        measureScreen_->showError(QString("Lamp warming up - %1 min left (Skip warm-up... to override)")
+                                      .arg(warmUp_.minutesLeft()));
+        return;
+    }
     if (!state_.canOpenBaselineWizard()) {
         measureScreen_->showError(QString("Baseline not possible now (%1)")
                                       .arg(f20app::toString(state_.state())));
@@ -621,19 +633,69 @@ void MainWindow::loadRecipeLimits() {
 void MainWindow::applyRecipeLimits(const QString& recipe) {
     const f20app::BaselineLimits limits = recipeLimits_.forRecipe(recipe.toStdString());
     baseline_.setThresholds(limits.warnMinutes, limits.blockMinutes);
+    warmUp_.setRequiredMinutes(limits.warmUpMinutes);
     if (recipe != limitsRecipe_) {
         limitsRecipe_ = recipe;
-        const QString line =
-            QString("[baseline] limits for '%1' (%2): yellow after %3 min, red after %4 min")
-                .arg(recipe, QString::fromStdString(recipeLimits_.profileFor(recipe.toStdString())))
-                .arg(limits.warnMinutes)
-                .arg(limits.blockMinutes);
+        const QString line = QString("[baseline] limits for '%1' (%2): yellow after %3 min, "
+                                     "red after %4 min, lamp warm-up %5 min")
+                                 .arg(recipe, QString::fromStdString(
+                                                  recipeLimits_.profileFor(recipe.toStdString())))
+                                 .arg(limits.warnMinutes)
+                                 .arg(limits.blockMinutes)
+                                 .arg(limits.warmUpMinutes);
         diagnosticsScreen_->appendLog(line);
         qInfo().noquote() << line;
     }
+    updateWarmUp();
     syncBaselineState();
     updateMeasurePermission();
     updateStatusBar();
+}
+
+// Spec 6.2: skipping the warm-up needs a reason, and the reason is logged.
+// Non-modal, like the wizard: the app keeps running behind it.
+void MainWindow::skipWarmUp() {
+    if (warmUp_.isDone())
+        return;
+    auto* dialog = new QInputDialog(this);
+    dialog->setWindowTitle("Skip lamp warm-up");
+    dialog->setLabelText(QString("The lamp needs %1 more min - a baseline with a cold lamp "
+                                 "drifts.\nReason for skipping (logged):")
+                             .arg(warmUp_.minutesLeft()));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QInputDialog::textValueSelected, this, [this](const QString& text) {
+        const QString reason = text.trimmed();
+        if (reason.isEmpty()) {
+            measureScreen_->showError("Warm-up not skipped: a reason is required");
+            return;
+        }
+        if (warmUp_.isDone())
+            return;
+        const int minutesLeft = warmUp_.minutesLeft();
+        warmUp_.skip();
+        const QString who = measureScreen_->operatorName().trimmed();
+        logEvent(QString("[warm-up] skipped with %1 min left by %2: %3")
+                     .arg(minutesLeft)
+                     .arg(who.isEmpty() ? QString("(no operator name)") : who, reason));
+        updateWarmUp();
+        updateStatusBar();
+    });
+    dialog->open();
+}
+
+// Notes the moment the lamp counts as warm. A recipe that needs a longer
+// warm-up can make it cold again - the lamp has not been on long enough.
+void MainWindow::updateWarmUp() {
+    const bool done = warmUp_.isDone();
+    if (done && !warmUpWasDone_ && !warmUp_.isSkipped())
+        logEvent("[warm-up] lamp warm - baseline possible");
+    warmUpWasDone_ = done;
+}
+
+// Diagnostics screen AND the log file - appendLog alone is screen only.
+void MainWindow::logEvent(const QString& line) {
+    diagnosticsScreen_->appendLog(line);
+    qInfo().noquote() << line;
 }
 
 // Stored as invalid too, so a reconnect cannot bring this baseline back.
@@ -693,6 +755,13 @@ void MainWindow::updateStatusBar() {
     }
     baselineLabel_->setText(text);
     baselineLabel_->setStyleSheet("color: " + color + ";");
+
+    const bool warm = warmUp_.isDone();
+    warmUpLabel_->setVisible(!warm);
+    warmUpLabel_->setText(QString("lamp warm-up: %1 min left").arg(warmUp_.minutesLeft()));
+    warmUpLabel_->setStyleSheet("color: #b05000;");
+    baselineAction_->setEnabled(warm);
+    skipWarmUpAction_->setVisible(!warm);
     const f20app::BaselineLimits limits = recipeLimits_.forRecipe(limitsRecipe_.toStdString());
     baselineLabel_->setToolTip(QString("limits for '%1': yellow after %2 min, red after %3 min")
                                    .arg(limitsRecipe_)
@@ -711,6 +780,7 @@ void MainWindow::publishStatus() {
                      {"channelSerial", channelSerial_.toStdString()}};
     if (const auto age = baseline_.ageMinutes())
         status["baselineAgeMinutes"] = *age;
+    status["warmUpLeftMinutes"] = warmUp_.minutesLeft();
     if (const auto committedAt = baseline_.committedAt())
         status["baselineCommittedAtUtc"] =
             toDateTimeUtc(*committedAt).toString(Qt::ISODateWithMs).toStdString();

@@ -5,6 +5,7 @@
 #include "measuregate.h"
 #include "recipelimits.h"
 #include "storage.h"
+#include "warmup.h"
 
 #include <QDir>
 #include <QMainWindow>
@@ -15,6 +16,7 @@
 #include <optional>
 
 class BaselineWizard;
+class QAction;
 class MeasureScreen;
 class HistoryScreen;
 class DiagnosticsScreen;
@@ -49,6 +51,9 @@ private:
     void failReanalysis(const QString& operatorMessage);
     bool storeResult(const f20::MeasureResult& result, MeasurementRecord record);
     void runBaselineWizard();
+    void skipWarmUp();
+    void updateWarmUp();
+    void logEvent(const QString& line);
     void onBridgeConnected();
     void enterDeviceFault(const QString& message);
     void restoreBaselineAge();
@@ -71,6 +76,8 @@ private:
     f20app::AppStateMachine state_;
     f20app::BaselineTracker baseline_;
     f20app::RecipeLimits recipeLimits_;
+    f20app::WarmUpTimer warmUp_;
+    bool warmUpWasDone_ = false;
     QString limitsRecipe_; // recipe whose limits the tracker uses now
     Storage storage_;
     ServerLink* serverLink_ = nullptr;
@@ -81,6 +88,9 @@ private:
     DiagnosticsScreen* diagnosticsScreen_;
     QLabel* stateLabel_;
     QLabel* baselineLabel_;
+    QLabel* warmUpLabel_;
+    QAction* baselineAction_;
+    QAction* skipWarmUpAction_;
     QLabel* serverLabel_;
     QTimer autoCycleTimer_;
     QTimer ageTimer_;
