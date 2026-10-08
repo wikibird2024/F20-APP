@@ -46,11 +46,20 @@ private:
     ServerLink* createServerLink();
     void updateServerState();
     void loadRecipes();
-    void startMeasurement(Trigger trigger);
-    void failMeasurement(const QString& operatorMessage);
+    // transactionId, recipe and sampleId come with a server request; empty
+    // recipe or sample = the one on the Measure screen.
+    void startMeasurement(Trigger trigger, const QString& transactionId = {},
+                          const QString& recipe = {}, const QString& sampleId = {});
+    void failMeasurement(const QString& operatorMessage, const QString& transactionId = {},
+                         const QString& errorCode = {});
     void startReanalysis(const QString& spectrumPath);
     void failReanalysis(const QString& operatorMessage);
-    bool storeResult(const f20::MeasureResult& result, MeasurementRecord record);
+    std::optional<QString> storeResult(const f20::MeasureResult& result, MeasurementRecord record);
+    void publishResultToServer(const f20::MeasureResult& result, const MeasurementRecord& record,
+                               const QString& resultId, const QString& transactionId);
+    void answerBaselineInvalidate(const QString& transactionId, const QString& reason);
+    void answerResults(const QString& transactionId, const QString& sinceUtc, int page);
+    void answerSpectrum(const QString& transactionId, const QString& resultId);
     void runBaselineWizard();
     void skipWarmUp();
     void updateWarmUp();
@@ -103,5 +112,8 @@ private:
     QTimer ageTimer_;
     QString expectedSerial_; // [device] serial in f20.ini
     QString channelSerial_;  // what the bridge reports
-    QString bridgeVersion_;
+    QString bridgeVersion_;     // "bridge / FILMeasure", stored with each result
+    QString bridgeOnlyVersion_; // for the server status
+    QString filmeasureVersion_;
+    int resultsPageSize_ = 50;  // get_results page size
 };

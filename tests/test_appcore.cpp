@@ -304,3 +304,15 @@ TEST_CASE("startup baseline: restore, offer recovery, or run the wizard") {
     CHECK_ENUM_EQ(startupBaseline(false, std::nullopt), R::runWizard);
     CHECK_ENUM_EQ(startupBaseline(false, S::None), R::runWizard);
 }
+
+TEST_CASE("server names: machine_status per state, error code per refusal") {
+    CHECK(std::string(machineStatus(AppState::Ready)) == "Ready");
+    CHECK(std::string(machineStatus(AppState::NoBaseline)) == "NoBaseline");
+    CHECK(std::string(machineStatus(AppState::Fault)) == "Fault");
+    CHECK(std::string(serverErrorCode(Refusal::noBaseline)) == "measureNotReady");
+    CHECK(std::string(serverErrorCode(Refusal::baselineStale)) == "baselineStale");
+    CHECK(std::string(serverErrorCode(Refusal::baselineWizardOpen)) == "busy");
+    CHECK(std::string(serverErrorCode(Refusal::busy)) == "busy");
+    CHECK(std::string(serverErrorCode(Refusal::fault)) == "bridgeFault");
+    CHECK(std::string(serverErrorCode(Refusal::storageDown)) == "storageDown");
+}

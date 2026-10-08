@@ -19,7 +19,11 @@ QString toString(ServerConnection state)
 
 void NullServerLink::publishStatus(const f20::json &status)
 {
-    if (status == lastStatus_)
+    // Logged when the machine status changes - the age changes every minute.
+    const auto machineStatus = [](const f20::json &message) {
+        return message.is_object() ? message.value("machine_status", f20::json()) : f20::json();
+    };
+    if (lastStatus_.is_object() && machineStatus(status) == machineStatus(lastStatus_))
         return;
     lastStatus_ = status;
     qInfo().noquote() << "[server status]" << QString::fromStdString(status.dump());

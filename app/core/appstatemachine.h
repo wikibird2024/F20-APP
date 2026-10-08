@@ -14,6 +14,9 @@ namespace f20app {
 enum class AppState { Starting, NoBaseline, Baselining, Ready, Measuring, Analyzing, Fault };
 
 const char* toString(AppState state);
+// The state as the server's status message shows it (spec 8.2.5.1):
+// "Starting", "NoBaseline", ..., "Ready". "Offline" is the Last Will.
+const char* machineStatus(AppState state);
 
 class AppStateMachine {
 public:

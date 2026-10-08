@@ -15,6 +15,19 @@ const char* toString(AppState state) {
     return "?";
 }
 
+const char* machineStatus(AppState state) {
+    switch (state) {
+    case AppState::Starting:   return "Starting";
+    case AppState::NoBaseline: return "NoBaseline";
+    case AppState::Baselining: return "Baselining";
+    case AppState::Ready:      return "Ready";
+    case AppState::Measuring:  return "Measuring";
+    case AppState::Analyzing:  return "Analyzing";
+    case AppState::Fault:      return "Fault";
+    }
+    return "Unknown";
+}
+
 void AppStateMachine::setChangeHandler(ChangeHandler handler) {
     onChange_ = std::move(handler);
 }

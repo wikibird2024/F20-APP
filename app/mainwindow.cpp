@@ -2,6 +2,7 @@
 
 #include "baselinewizard.h"
 #include "devicecheck.h"
+#include "f20/envelope.h"
 #include "diagnosticsscreen.h"
 #include "f20/errors.h"
 #include "f20/jsonread.h"
@@ -17,6 +18,7 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QFile>
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
@@ -24,6 +26,9 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QToolBar>
+
+#include <algorithm>
+#include <chrono>
 
 namespace {
 
@@ -84,6 +89,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     // Acquire and analyze can take much longer than a status request.
     measureTimeoutMs_ = settings_.value("bridge/measureTimeoutMs", 60000).toInt();
     expectedSerial_ = settings_.value("device/serial").toString().trimmed();
+    resultsPageSize_ = std::clamp(settings_.value("mqtt/pageSize", 50).toInt(), 1, 500);
 
     const QString databasePath =
         resolvePath(settings_.value("storage/database", "f20data.db").toString());
@@ -163,8 +169,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     connect(&bridge_, &BridgeClient::reconnectExhausted, this, [this] {
         state_.onBridgeDown(); // also leaves Starting when the bridge never came up
         measureScreen_->showError("Bridge not reachable - check Diagnostics");
-        serverLink_->publishAlarm("bridgeFault",
-                                  {{"message", "bridge not reachable after 3 retries"}});
+        serverLink_->publishAlarm("fault", {{"message", "bridge not reachable after 3 retries"}});
     });
     connect(&bridge_, &BridgeClient::protocolLog, this, [this](const QString& line) {
         diagnosticsScreen_->appendLog(line);
@@ -202,11 +207,16 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
                     static_cast<quint16>(settings_.value("bridge/port", 5555).toUInt()));
             });
 
-    // Remote commands (MQTT later; same path as the operator's button).
+    // Server requests (spec 8.2.4): the same paths as the operator's
+    // buttons, each answered once with its transaction id.
     connect(serverLink_, &ServerLink::remoteMeasureRequested, this,
-            [this](const QString&, const QString&) { startMeasurement(Trigger::remote); });
+            [this](const QString& transactionId, const QString& recipe, const QString& sampleId) {
+                startMeasurement(Trigger::remote, transactionId, recipe, sampleId);
+            });
     connect(serverLink_, &ServerLink::remoteBaselineInvalidate, this,
-            [this] { invalidateBaseline("remote command"); });
+            &MainWindow::answerBaselineInvalidate);
+    connect(serverLink_, &ServerLink::resultsRequested, this, &MainWindow::answerResults);
+    connect(serverLink_, &ServerLink::spectrumRequested, this, &MainWindow::answerSpectrum);
 
     // The recipe decides the baseline limits (spec 2.2 #3). setRecipes()
     // ran before this connect, so apply the first recipe by hand.
@@ -220,6 +230,7 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
         syncBaselineState();
         updateMeasurePermission();
         updateStatusBar();
+        publishStatus(); // baseline age and warm-up count down
     });
 
     updateMeasurePermission();
@@ -309,11 +320,21 @@ std::optional<f20app::Refusal> MainWindow::measureRefusal() const {
     return f20app::checkMeasure(state_.state(), baseline_.status(), storage_.isOpen());
 }
 
-void MainWindow::startMeasurement(Trigger trigger) {
+void MainWindow::startMeasurement(Trigger trigger, const QString& transactionId,
+                                  const QString& recipeName, const QString& sampleId) {
+    const QString recipe = recipeName.isEmpty() ? measureScreen_->currentRecipe() : recipeName;
     // This recipe's limits, right now - not at the next timer tick.
-    applyRecipeLimits(measureScreen_->currentRecipe());
+    applyRecipeLimits(recipe);
     if (const auto refusal = measureRefusal()) {
         const QString text = f20app::operatorText(*refusal);
+        if (trigger == Trigger::remote) {
+            // Same check as the button (spec 2.3 #5); the server learns why.
+            logEvent("[measure] server request refused: " + text);
+            serverLink_->sendResponse(transactionId, "measure",
+                                      {{"error", f20app::serverErrorCode(*refusal)},
+                                       {"message", text.toStdString()}});
+            return;
+        }
         if (trigger == Trigger::autoCycle) {
             // Logged, not shown: every N seconds it would cover a real error.
             diagnosticsScreen_->appendLog("[auto-cycle] skipped: " + text);
@@ -328,11 +349,13 @@ void MainWindow::startMeasurement(Trigger trigger) {
                                                                  : "remote";
     diagnosticsScreen_->appendLog(QString("[measure] trigger: ") + triggerText);
 
-    const QString recipe = measureScreen_->currentRecipe();
     MeasurementRecord record;
     record.recipeName = recipe;
     record.operatorName = measureScreen_->operatorName();
-    record.sampleId = measureScreen_->sampleId();
+    if (trigger == Trigger::remote && record.operatorName.trimmed().isEmpty())
+        record.operatorName = "server";
+    record.sampleId = sampleId.isEmpty() ? measureScreen_->sampleId() : sampleId;
+    const QString tid = transactionId; // empty unless the server asked
     if (const auto committedAt = baseline_.committedAt()) // the baseline this result uses
         record.baselineCommittedAtUtc = toDateTimeUtc(*committedAt);
 
@@ -340,38 +363,40 @@ void MainWindow::startMeasurement(Trigger trigger) {
     // acquire -> analyze -> save. A separate acquire after `measure` would
     // save a second, different spectrum next to the result.
     bridge_.send("setRecipe", {{"name", recipe.toStdString()}}, this,
-                 [this, record](const f20::Reply& recipeReply) {
+                 [this, record, tid](const f20::Reply& recipeReply) {
         if (!recipeReply.ok) {
-            failMeasurement(operatorText(recipeReply, record.recipeName));
+            failMeasurement(operatorText(recipeReply, record.recipeName), tid,
+                            QString::fromStdString(recipeReply.errorCode));
             return;
         }
         bridge_.send("acquireSpectrum", {}, this,
-                     [this, record](const f20::Reply& spectrumReply) {
+                     [this, record, tid](const f20::Reply& spectrumReply) {
             if (!spectrumReply.ok) {
-                failMeasurement(operatorText(spectrumReply));
+                failMeasurement(operatorText(spectrumReply), tid,
+                                QString::fromStdString(spectrumReply.errorCode));
                 return;
             }
             const auto spectrum = f20::spectrumFromJson(spectrumReply.result);
             if (!spectrum) {
-                failMeasurement("Malformed spectrum from bridge");
+                failMeasurement("Malformed spectrum from bridge", tid, "filmeasureError");
                 return;
             }
             measureScreen_->showSpectrum(*spectrum);
             bridge_.send("analyzeSpectrum", {}, this,
-                         [this, record](const f20::Reply& analyzeReply) {
+                         [this, record, tid](const f20::Reply& analyzeReply) {
                 if (!analyzeReply.ok) {
-                    failMeasurement(operatorText(analyzeReply));
+                    failMeasurement(operatorText(analyzeReply), tid,
+                                    QString::fromStdString(analyzeReply.errorCode));
                     return;
                 }
                 const auto result = f20::measureResultFromJson(analyzeReply.result);
                 if (!result) {
-                    failMeasurement("Malformed result from bridge");
+                    failMeasurement("Malformed result from bridge", tid, "filmeasureError");
                     return;
                 }
                 const QString file = spectrumFilePath(record.sampleId);
-                const f20::json resultJson = analyzeReply.result;
                 bridge_.send("saveSpectrum", {{"path", file.toStdString()}}, this,
-                             [this, record, result, file, resultJson](
+                             [this, record, result, file, tid](
                                  const f20::Reply& saveReply) mutable {
                     if (saveReply.ok)
                         record.spectrumFile = file; // only a file that exists
@@ -380,34 +405,133 @@ void MainWindow::startMeasurement(Trigger trigger) {
                                                       operatorText(saveReply));
                     state_.onMeasureFinished();
                     measureScreen_->showResult(*result);
-                    if (!storeResult(*result, record))
+                    const auto resultId = storeResult(*result, record);
+                    if (!resultId)
                         measureScreen_->showError("Result NOT saved to the database - see log");
-                    serverLink_->publishResult(resultJson);
-                    if (!result->passed)
-                        serverLink_->publishAlarm("fail", resultJson);
+                    publishResultToServer(*result, record, resultId.value_or(""), tid);
                 }, measureTimeoutMs_);
             }, measureTimeoutMs_);
         }, measureTimeoutMs_);
     });
 }
 
-void MainWindow::failMeasurement(const QString& operatorMessage) {
+void MainWindow::failMeasurement(const QString& operatorMessage, const QString& transactionId,
+                                 const QString& errorCode) {
     state_.onMeasureFinished(); // ignored if the bridge drop already made it Fault
     measureScreen_->showError(operatorMessage);
+    if (!transactionId.isEmpty())
+        serverLink_->sendResponse(transactionId, "measure",
+                                  {{"error", errorCode.isEmpty() ? std::string("filmeasureError")
+                                                                 : errorCode.toStdString()},
+                                   {"message", operatorMessage.toStdString()}});
 }
 
-// The snapshot fields every stored result carries; returns false (and
-// raises the alarm) when the database refused the result.
-bool MainWindow::storeResult(const f20::MeasureResult& result, MeasurementRecord record) {
+// The snapshot fields every stored result carries; returns the result id,
+// or nullopt (and raises the alarm) when the database refused the result.
+std::optional<QString> MainWindow::storeResult(const f20::MeasureResult& result,
+                                               MeasurementRecord record) {
     record.channelSerial = channelSerial_;
     record.appVersion = QCoreApplication::applicationVersion();
     record.bridgeVersion = bridgeVersion_;
-    const bool stored = storage_.insertMeasurement(result, record).has_value();
-    if (!stored)
-        serverLink_->publishAlarm("storageFailed",
-                                  {{"message", storage_.lastError().toStdString()}});
+    const auto resultId = storage_.insertMeasurement(result, record);
+    if (!resultId)
+        serverLink_->publishAlarm(
+            "fault", {{"message", ("result not saved: " + storage_.lastError()).toStdString()}});
     historyScreen_->refresh();
-    return stored;
+    return resultId;
+}
+
+// Spec 8.2.5.2: the result message after every measurement and
+// re-analysis; the same data answers a server's measure request.
+void MainWindow::publishResultToServer(const f20::MeasureResult& result,
+                                       const MeasurementRecord& record, const QString& resultId,
+                                       const QString& transactionId) {
+    const auto now = std::chrono::system_clock::now();
+    f20::ResultFacts facts;
+    facts.resultId = resultId.toStdString();
+    facts.measuredAtUtc = f20::isoUtc(now);
+    facts.recipeName = record.recipeName.toStdString();
+    facts.sampleId = record.sampleId.toStdString();
+    facts.operatorName = record.operatorName.toStdString();
+    facts.reanalyzedFrom = record.reanalyzedFrom.toStdString();
+    if (record.baselineCommittedAtUtc)
+        facts.baselineAgeMinutes =
+            static_cast<int>(record.baselineCommittedAtUtc->secsTo(toDateTimeUtc(now)) / 60);
+    const f20::json data = f20::serverResultData(result, facts);
+
+    serverLink_->publishResult(data);
+    if (!result.passed)
+        serverLink_->publishAlarm(
+            "fail", {{"message", QString("FAIL: recipe '%1', sample '%2'")
+                                     .arg(record.recipeName, record.sampleId)
+                                     .toStdString()},
+                     {"result_id", facts.resultId}});
+    if (!transactionId.isEmpty())
+        serverLink_->sendResponse(transactionId, "measure", data);
+}
+
+void MainWindow::answerBaselineInvalidate(const QString& transactionId, const QString& reason) {
+    invalidateBaseline("server: " + (reason.trimmed().isEmpty() ? QString("no reason given")
+                                                                : reason.trimmed()));
+    serverLink_->sendAck(transactionId, "baseline_invalidate", f20::json::object());
+}
+
+// Spec 8.2.5.4: the server's copy is the database of record; it backfills
+// gaps from ours, page by page, oldest first.
+void MainWindow::answerResults(const QString& transactionId, const QString& sinceUtc, int page) {
+    QDateTime since;
+    if (!sinceUtc.isEmpty()) {
+        since = QDateTime::fromString(sinceUtc, Qt::ISODateWithMs);
+        if (!since.isValid()) {
+            serverLink_->sendResponse(transactionId, "get_results",
+                                      {{"error", "badRequest"},
+                                       {"message", "since must be an ISO 8601 UTC time"}});
+            return;
+        }
+    }
+    if (!storage_.isOpen()) {
+        serverLink_->sendResponse(transactionId, "get_results",
+                                  {{"error", "storageDown"}, {"message", "database not available"}});
+        return;
+    }
+    const ResultPage found =
+        storage_.resultsSince(since, (page - 1) * resultsPageSize_, resultsPageSize_);
+    f20::json results = f20::json::array();
+    for (const StoredResult& stored : found.results) {
+        f20::ResultFacts facts;
+        facts.resultId = stored.resultId.toStdString();
+        facts.measuredAtUtc = stored.timeUtc.toStdString();
+        facts.recipeName = stored.recipeName.toStdString();
+        facts.sampleId = stored.sampleId.toStdString();
+        facts.operatorName = stored.operatorName.toStdString();
+        facts.baselineAgeMinutes = stored.baselineAgeMinutes;
+        facts.reanalyzedFrom = stored.reanalyzedFrom.toStdString();
+        results.push_back(f20::serverResultData(stored.result, facts));
+    }
+    const int pages = std::max(1, (found.total + resultsPageSize_ - 1) / resultsPageSize_);
+    serverLink_->sendResponse(transactionId, "get_results",
+                              {{"results", std::move(results)}, {"page", page}, {"pages", pages}});
+}
+
+// Spec 8.2.5.4: the saved spectrum of one result, as CSV text.
+void MainWindow::answerSpectrum(const QString& transactionId, const QString& resultId) {
+    const auto reply = [&](const char* error, const QString& message, const std::string& csv = {}) {
+        f20::json data{{"result_id", resultId.toStdString()}, {"csv", csv}, {"error", error}};
+        if (!message.isEmpty())
+            data["message"] = message.toStdString();
+        serverLink_->sendResponse(transactionId, "get_spectrum", data);
+    };
+    const auto file = storage_.spectrumFileForResult(resultId);
+    if (!file)
+        return reply("resultNotFound", "no result with this id");
+    if (file->isEmpty())
+        return reply("fileOpenFailed", "no spectrum was saved for this result");
+    QFile csv(*file);
+    if (!csv.open(QIODevice::ReadOnly | QIODevice::Text))
+        return reply("fileOpenFailed", "cannot open " + *file);
+    if (csv.size() > 900 * 1024) // one MQTT message stays under the 1 MiB limit
+        return reply("fileOpenFailed", "spectrum file too large for one message");
+    reply("", {}, csv.readAll().toStdString());
 }
 
 void MainWindow::startReanalysis(const QString& spectrumPath) {
@@ -454,11 +578,13 @@ void MainWindow::startReanalysis(const QString& spectrumPath) {
                     return;
                 }
                 state_.onAnalyzeFinished();
-                if (storeResult(*result, record))
+                const auto resultId = storeResult(*result, record);
+                if (resultId)
                     historyScreen_->showStatus("Re-analysis stored (original kept)", false);
                 else
                     historyScreen_->showStatus("Re-analysis NOT saved to the database - see log",
                                                true);
+                publishResultToServer(*result, record, resultId.value_or(""), {});
             }, measureTimeoutMs_);
         });
     });
@@ -576,7 +702,7 @@ void MainWindow::enterDeviceFault(const QString& message) {
     diagnosticsScreen_->setBridgeState(message, false);
     diagnosticsScreen_->appendLog("[device] " + message);
     qCritical().noquote() << "[device]" << message;
-    serverLink_->publishAlarm("bridgeFault", {{"message", message.toStdString()}});
+    serverLink_->publishAlarm("fault", {{"message", message.toStdString()}});
     updateStatusBar();
 }
 
@@ -684,7 +810,12 @@ void MainWindow::syncBaselineState() {
     switch (f20app::baselineChange(state_.state(), baseline_.status())) {
     case f20app::BaselineChange::nowStale:
         state_.onBaselineInvalid();
-        serverLink_->publishAlarm("baselineStale", {});
+        serverLink_->publishAlarm(
+            "baseline_stale",
+            {{"message", QString("baseline older than %1 min, the limit of '%2'")
+                             .arg(recipeLimits_.forRecipe(limitsRecipe_.toStdString()).blockMinutes)
+                             .arg(limitsRecipe_)
+                             .toStdString()}});
         break;
     case f20app::BaselineChange::nowValid:
         state_.onBaselineValid();
@@ -860,10 +991,13 @@ void MainWindow::refreshDiagnostics() {
     bridge_.send("getVersion", {}, this, [this](const f20::Reply& reply) {
         if (!reply.ok)
             return;
-        bridgeVersion_ = QString::fromStdString(
-            f20::stringAt(reply.result, "bridge").value_or("?") + " / " +
-            f20::stringAt(reply.result, "filmeasure").value_or("?"));
+        bridgeOnlyVersion_ =
+            QString::fromStdString(f20::stringAt(reply.result, "bridge").value_or("?"));
+        filmeasureVersion_ =
+            QString::fromStdString(f20::stringAt(reply.result, "filmeasure").value_or("?"));
+        bridgeVersion_ = bridgeOnlyVersion_ + " / " + filmeasureVersion_;
         diagnosticsScreen_->setVersions(bridgeVersion_);
+        publishStatus();
     });
     // Signal health reads the spectrometer: not between the steps of a
     // measurement, a re-analysis or a baseline.
@@ -918,20 +1052,26 @@ void MainWindow::updateStatusBar() {
                                    .arg(limits.blockMinutes));
 }
 
+// Spec 8.2.5.1, repeated every second by the link.
 void MainWindow::publishStatus() {
-    const bool usable = state_.state() == f20app::AppState::Ready ||
-                        state_.state() == f20app::AppState::Measuring;
+    const f20app::AppState state = state_.state();
+    const bool usable = state == f20app::AppState::Ready || state == f20app::AppState::Measuring;
     const auto baseline = baseline_.status();
-    f20::json status{{"state", f20app::toString(state_.state())},
-                     {"baselineValid",
-                      usable && (baseline == f20app::BaselineStatus::Fresh ||
-                                 baseline == f20app::BaselineStatus::Aging)},
-                     {"channelSerial", channelSerial_.toStdString()}};
-    if (const auto age = baseline_.ageMinutes())
-        status["baselineAgeMinutes"] = *age;
-    status["warmUpLeftMinutes"] = warmUp_.minutesLeft();
-    if (const auto committedAt = baseline_.committedAt())
-        status["baselineCommittedAtUtc"] =
-            toDateTimeUtc(*committedAt).toString(Qt::ISODateWithMs).toStdString();
+    const auto age = baseline_.ageMinutes();
+    const f20::json baselineInfo{
+        {"valid", usable && (baseline == f20app::BaselineStatus::Fresh ||
+                             baseline == f20app::BaselineStatus::Aging)},
+        {"age_minutes", age ? f20::json(*age) : f20::json(nullptr)}};
+    const QDateTime midnightUtc = QDateTime(QDate::currentDate(), QTime(0, 0)).toUTC();
+    const f20::json status{
+        {"software_version", QCoreApplication::applicationVersion().toStdString()},
+        {"bridge_version", bridgeOnlyVersion_.toStdString()},
+        {"filmeasure_version", filmeasureVersion_.toStdString()},
+        {"machine_status", f20app::machineStatus(state)},
+        {"recipe_name", limitsRecipe_.toStdString()},
+        {"baseline", baselineInfo},
+        {"warm_up_left_minutes", warmUp_.minutesLeft()},
+        {"processed_today", storage_.countResultsSince(midnightUtc)},
+        {"error", state == f20app::AppState::Fault ? "bridgeFault" : ""}};
     serverLink_->publishStatus(status);
 }

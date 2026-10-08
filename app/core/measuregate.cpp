@@ -52,6 +52,19 @@ const char* toString(Refusal refusal) {
     return "?";
 }
 
+const char* serverErrorCode(Refusal refusal) {
+    switch (refusal) {
+    case Refusal::storageDown:        return "storageDown";
+    case Refusal::fault:
+    case Refusal::starting:           return "bridgeFault";
+    case Refusal::baselineWizardOpen:
+    case Refusal::busy:               return "busy";
+    case Refusal::noBaseline:         return "measureNotReady";
+    case Refusal::baselineStale:      return "baselineStale";
+    }
+    return "filmeasureError";
+}
+
 const char* operatorText(Refusal refusal) {
     switch (refusal) {
     case Refusal::storageDown:        return "Database not available - results cannot be saved";
