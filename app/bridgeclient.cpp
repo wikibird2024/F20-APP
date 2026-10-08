@@ -218,7 +218,7 @@ void BridgeClient::sendNext()
 void BridgeClient::writeRequest(Queued request)
 {
     const int id = request.id;
-    Pending pending = std::move(request.pending);
+    Pending   pending = std::move(request.pending);
     // The timeout counts from now, not from send(): time spent waiting in
     // the queue is not the bridge's fault.
     pending.timeout = new QTimer(this);
