@@ -289,3 +289,18 @@ TEST_CASE("lamp warm-up: recipe change, skip, never started, clock set back") {
     warmUp.setRequiredMinutes(0);
     CHECK(warmUp.isDone(t0));
 }
+
+TEST_CASE("startup baseline: restore, offer recovery, or run the wizard") {
+    using S = BaselineStatus;
+    using R = StartupBaseline;
+    // FILMeasure still has an active baseline.
+    CHECK_ENUM_EQ(startupBaseline(true, S::Fresh), R::restoreAge);
+    CHECK_ENUM_EQ(startupBaseline(true, S::Stale), R::restoreAge); // goes stale right after
+    CHECK_ENUM_EQ(startupBaseline(true, std::nullopt), R::unknownAge);
+    // FILMeasure lost it (restart, power cut).
+    CHECK_ENUM_EQ(startupBaseline(false, S::Fresh), R::offerRecover);
+    CHECK_ENUM_EQ(startupBaseline(false, S::Aging), R::offerRecover);
+    CHECK_ENUM_EQ(startupBaseline(false, S::Stale), R::storedTooOld);
+    CHECK_ENUM_EQ(startupBaseline(false, std::nullopt), R::runWizard);
+    CHECK_ENUM_EQ(startupBaseline(false, S::None), R::runWizard);
+}

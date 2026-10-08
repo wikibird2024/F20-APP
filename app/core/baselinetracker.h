@@ -35,4 +35,20 @@ private:
     int blockMinutes_ = 30;
 };
 
+// What to do with the baseline when the bridge (re)connects (spec 2.1 #4).
+// FILMeasure knows whether it has an active baseline, not how old it is;
+// the age always comes from our own stored commit, and an unknown age
+// never passes as fresh.
+enum class StartupBaseline {
+    restoreAge,   // FILMeasure has one and we stored its commit: use that age
+    unknownAge,   // FILMeasure has one, but we have no commit: run the baseline
+    offerRecover, // FILMeasure lost it, our commit is within the limits: offer to recover
+    storedTooOld, // FILMeasure lost it, our commit is stale: run the baseline
+    runWizard,    // nothing to restore
+};
+
+// storedCommit: the status of our last valid commit under the current
+// limits, nullopt when none is stored.
+StartupBaseline startupBaseline(bool bridgeHasBaseline, std::optional<BaselineStatus> storedCommit);
+
 } // namespace f20app

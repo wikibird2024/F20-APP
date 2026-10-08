@@ -41,7 +41,8 @@ std::optional<double> parseNumber(const std::string& text) {
 
 } // namespace
 
-SimEngine::SimEngine(SimConfig config) : config_(std::move(config)) {}
+SimEngine::SimEngine(SimConfig config)
+    : config_(std::move(config)), hasStoredBaseline_(config_.storedBaselineOnDisk) {}
 
 double SimEngine::targetThicknessNm() const {
     if (auto it = forcedThicknessNm_.find(1); it != forcedThicknessNm_.end())

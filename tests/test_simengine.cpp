@@ -112,6 +112,15 @@ TEST_CASE("recover works only after a committed baseline (spec test 6)") {
     CHECK(engine.handle(req(3, "baselineRecover")).ok);
 }
 
+TEST_CASE("a baseline stored on disk is recovered without a commit in this run") {
+    f20sim::SimConfig config;
+    config.storedBaselineOnDisk = true;
+    SimEngine engine(config);
+    CHECK_FALSE(engine.handle(req(1, "getStatus")).result["baselineValid"].get<bool>());
+    CHECK(engine.handle(req(2, "baselineRecover")).ok);
+    CHECK(engine.handle(req(3, "getStatus")).result["baselineValid"].get<bool>());
+}
+
 TEST_CASE("quit sets the flag that stops the server loop") {
     SimEngine engine;
     CHECK_FALSE(engine.quitRequested());

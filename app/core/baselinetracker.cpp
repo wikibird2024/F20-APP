@@ -36,4 +36,14 @@ BaselineStatus BaselineTracker::status(Clock::time_point now) const {
     return BaselineStatus::Fresh;
 }
 
+StartupBaseline startupBaseline(bool bridgeHasBaseline, std::optional<BaselineStatus> storedCommit) {
+    const bool haveCommit = storedCommit && *storedCommit != BaselineStatus::None;
+    if (bridgeHasBaseline)
+        return haveCommit ? StartupBaseline::restoreAge : StartupBaseline::unknownAge;
+    if (!haveCommit)
+        return StartupBaseline::runWizard;
+    return *storedCommit == BaselineStatus::Stale ? StartupBaseline::storedTooOld
+                                                  : StartupBaseline::offerRecover;
+}
+
 } // namespace f20app

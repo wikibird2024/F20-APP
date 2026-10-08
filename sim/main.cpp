@@ -5,6 +5,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 int main(int argc, char** argv) {
     std::printf("f20bridge-sim 0.1.0 - F20 bridge simulator\n");
@@ -14,18 +15,23 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
     std::uint16_t port = 5555;
-    if (argc > 1) {
+    f20sim::SimConfig config;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--stored-baseline") == 0) {
+            config.storedBaselineOnDisk = true;
+            continue;
+        }
         char* end = nullptr;
         errno = 0;
-        const long value = std::strtol(argv[1], &end, 10);
-        if (end == argv[1] || *end != '\0' || errno != 0 || value < 1 || value > 65535) {
-            std::fprintf(stderr, "usage: f20bridge-sim [port 1-65535]\n");
+        const long value = std::strtol(argv[i], &end, 10);
+        if (end == argv[i] || *end != '\0' || errno != 0 || value < 1 || value > 65535) {
+            std::fprintf(stderr, "usage: f20bridge-sim [port 1-65535] [--stored-baseline]\n");
             return 2;
         }
         port = static_cast<std::uint16_t>(value);
     }
 
-    f20sim::SimEngine engine;
+    f20sim::SimEngine engine(config);
     f20sim::SocketServer server(port);
     return server.run(engine);
 }

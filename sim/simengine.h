@@ -21,6 +21,9 @@ struct SimConfig {
     std::string channelSerial = "F20:SIM001";
     std::vector<std::string> recipes = {"SiO2 on Si", "SiN thick",
                                         "FAIL_GOF", "REF_LOW"};
+    // Like FILMeasure restarted after a commit: no active baseline, but the
+    // stored one can be recovered (f20bridge-sim --stored-baseline).
+    bool storedBaselineOnDisk = false;
 };
 
 class SimEngine {

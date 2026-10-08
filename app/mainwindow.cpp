@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
+#include <QMessageBox>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QToolBar>
@@ -146,6 +147,10 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
         // commit ignored - the app would stay in NoBaseline.
         if (baselineWizard_)
             baselineWizard_->reject();
+        // An open recovery offer is stale too: the reconnect asks again.
+        recoverableCommit_.reset();
+        if (recoverPrompt_)
+            recoverPrompt_->reject();
         // Forget the age: on reconnect it comes back from the bridge
         // ("baseline still valid?") and the database ("since when?").
         baseline_.invalidate();
@@ -471,6 +476,10 @@ void MainWindow::runBaselineWizard() {
                                       .arg(f20app::toString(state_.state())));
         return;
     }
+    // A full baseline replaces the one on offer.
+    recoverableCommit_.reset();
+    if (recoverPrompt_)
+        recoverPrompt_->reject();
     state_.onBaselineWizardOpened();
     auto* wizard = new BaselineWizard(bridge_, this);
     baselineWizard_ = wizard;
@@ -522,8 +531,33 @@ void MainWindow::onBridgeConnected() {
             return;
         }
         channelSerial_ = QString::fromStdString(reported);
-        if (f20::boolAt(reply.result, "baselineValid").value_or(false))
+
+        // Our last commit for this F20, judged by the current recipe's limits.
+        const auto committedAt = storage_.lastValidBaseline(channelSerial_);
+        std::optional<f20app::BaselineStatus> stored;
+        if (committedAt) {
+            f20app::BaselineTracker probe = baseline_;
+            probe.committed(toTimePoint(*committedAt));
+            stored = probe.status();
+        }
+        const bool bridgeHasBaseline = f20::boolAt(reply.result, "baselineValid").value_or(false);
+        switch (f20app::startupBaseline(bridgeHasBaseline, stored)) {
+        case f20app::StartupBaseline::restoreAge:
+        case f20app::StartupBaseline::unknownAge:
             restoreBaselineAge();
+            break;
+        case f20app::StartupBaseline::offerRecover:
+            recoverableCommit_ = committedAt;
+            offerBaselineRecovery();
+            break;
+        case f20app::StartupBaseline::storedTooOld:
+            logEvent("[baseline] FILMeasure has no active baseline; the last one (" +
+                     committedAt->toLocalTime().toString("HH:mm") +
+                     ") is too old to recover - run the baseline");
+            break;
+        case f20app::StartupBaseline::runWizard:
+            break;
+        }
         updateStatusBar();
     });
     refreshDiagnostics();
@@ -558,6 +592,85 @@ void MainWindow::restoreBaselineAge() {
     syncBaselineState();
     diagnosticsScreen_->appendLog("[baseline] restored, committed " +
                                   committedAt->toLocalTime().toString(Qt::ISODate));
+}
+
+// Spec 2.1 #4: after a restart or power cut FILMeasure may have lost its
+// active baseline while the reference data is still on disk; recovering
+// spares a full baseline. Offered only for a commit we stored ourselves,
+// so the age stays known - and it keeps that original commit time. After a
+// power cut the lamp is cold, so the offer waits for the warm-up.
+void MainWindow::offerBaselineRecovery() {
+    if (!recoverableCommit_ || recoverPrompt_ || !bridge_.isConnected() ||
+        state_.state() != f20app::AppState::NoBaseline)
+        return;
+    if (!warmUp_.isDone()) {
+        logEvent("[baseline] recovery of the last baseline is offered after the lamp warm-up");
+        return;
+    }
+    f20app::BaselineTracker probe = baseline_; // judged by the limits right now
+    probe.committed(toTimePoint(*recoverableCommit_));
+    if (probe.status() == f20app::BaselineStatus::Stale) {
+        logEvent("[baseline] the last baseline got too old while waiting - run the baseline");
+        recoverableCommit_.reset();
+        return;
+    }
+
+    auto* box = new QMessageBox(
+        QMessageBox::Question, "Recover baseline",
+        QString("FILMeasure has no active baseline.\n\nRecover the last baseline "
+                "(committed %1, %2 min ago)?\nIts age counts from that commit.")
+            .arg(recoverableCommit_->toLocalTime().toString("HH:mm"))
+            .arg(probe.ageMinutes().value_or(0)),
+        QMessageBox::Yes | QMessageBox::No, this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    recoverPrompt_ = box;
+    logEvent("[baseline] FILMeasure has no active baseline - offering to recover the one "
+             "committed " + recoverableCommit_->toLocalTime().toString(Qt::ISODate));
+    connect(box, &QDialog::finished, this, [this, box] {
+        if (!recoverableCommit_)
+            return; // withdrawn: bridge drop or wizard opened
+        if (box->clickedButton() == box->button(QMessageBox::Yes)) {
+            recoverBaseline();
+        } else {
+            logEvent("[baseline] recovery declined - run the baseline");
+            recoverableCommit_.reset();
+        }
+    });
+    box->open();
+}
+
+// Uses the Baselining state while it runs: like the wizard, it must not
+// overlap a measurement.
+void MainWindow::recoverBaseline() {
+    if (!recoverableCommit_ || state_.state() != f20app::AppState::NoBaseline)
+        return;
+    const QDateTime commit = *recoverableCommit_;
+    recoverableCommit_.reset();
+    state_.onBaselineWizardOpened();
+    logEvent("[baseline] recovering the baseline committed " +
+             commit.toLocalTime().toString(Qt::ISODate));
+    bridge_.send("baselineRecover", {}, this, [this, commit](const f20::Reply& reply) {
+        if (state_.state() != f20app::AppState::Baselining)
+            return; // the bridge dropped meanwhile: Fault, the reconnect asks again
+        if (reply.ok) {
+            baseline_.committed(toTimePoint(commit));
+            state_.onBaselineWizardClosed(true);
+            logEvent("[baseline] recovered - age counts from " +
+                     commit.toLocalTime().toString(Qt::ISODate));
+        } else {
+            state_.onBaselineWizardClosed(false);
+            const QString text = operatorText(reply);
+            measureScreen_->showError(text);
+            logEvent("[baseline] recovery failed: " + text);
+            // Gone for good: never offer this one again. A timeout or a lost
+            // connection says nothing about the baseline, so those don't.
+            if (reply.errorCode == "baselineRecoverFailed")
+                storage_.invalidateBaselines(channelSerial_, QDateTime::currentDateTimeUtc());
+        }
+        syncBaselineState();
+        updateMeasurePermission();
+        updateStatusBar();
+    });
 }
 
 // Stale blocks measuring (spec §6.2); a recipe with longer limits makes the
@@ -687,9 +800,13 @@ void MainWindow::skipWarmUp() {
 // warm-up can make it cold again - the lamp has not been on long enough.
 void MainWindow::updateWarmUp() {
     const bool done = warmUp_.isDone();
-    if (done && !warmUpWasDone_ && !warmUp_.isSkipped())
-        logEvent("[warm-up] lamp warm - baseline possible");
+    const bool justDone = done && !warmUpWasDone_;
     warmUpWasDone_ = done;
+    if (!justDone)
+        return;
+    if (!warmUp_.isSkipped())
+        logEvent("[warm-up] lamp warm - baseline possible");
+    offerBaselineRecovery(); // it waited for the lamp
 }
 
 // Diagnostics screen AND the log file - appendLog alone is screen only.

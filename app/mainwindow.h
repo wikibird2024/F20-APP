@@ -17,6 +17,7 @@
 
 class BaselineWizard;
 class QAction;
+class QMessageBox;
 class MeasureScreen;
 class HistoryScreen;
 class DiagnosticsScreen;
@@ -57,6 +58,8 @@ private:
     void onBridgeConnected();
     void enterDeviceFault(const QString& message);
     void restoreBaselineAge();
+    void offerBaselineRecovery();
+    void recoverBaseline();
     void loadRecipeLimits();
     void applyRecipeLimits(const QString& recipe);
     void syncBaselineState();
@@ -82,6 +85,8 @@ private:
     Storage storage_;
     ServerLink* serverLink_ = nullptr;
     QPointer<BaselineWizard> baselineWizard_; // null when no wizard is open
+    QPointer<QMessageBox> recoverPrompt_;     // null when no recovery offer is open
+    std::optional<QDateTime> recoverableCommit_; // our commit FILMeasure lost, still in limits
 
     MeasureScreen* measureScreen_;
     HistoryScreen* historyScreen_;
