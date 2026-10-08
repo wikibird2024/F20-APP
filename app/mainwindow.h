@@ -63,6 +63,7 @@ private:
     void loadRecipeLimits();
     void applyRecipeLimits(const QString& recipe);
     void syncBaselineState();
+    void askBaselineInvalid();
     void invalidateBaseline(const QString& reason);
     void refreshDiagnostics();
     void updateMeasurePermission();
@@ -96,6 +97,7 @@ private:
     QLabel* warmUpLabel_;
     QAction* baselineAction_;
     QAction* skipWarmUpAction_;
+    QAction* baselineInvalidAction_;
     QLabel* serverLabel_;
     QTimer autoCycleTimer_;
     QTimer ageTimer_;

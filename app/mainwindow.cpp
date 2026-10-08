@@ -105,6 +105,8 @@ MainWindow::MainWindow(const QString& configPath, QWidget* parent)
     toolbar->setMovable(false);
     baselineAction_ = toolbar->addAction("Baseline...", this, &MainWindow::runBaselineWizard);
     skipWarmUpAction_ = toolbar->addAction("Skip warm-up...", this, &MainWindow::skipWarmUp);
+    baselineInvalidAction_ =
+        toolbar->addAction("Baseline invalid...", this, &MainWindow::askBaselineInvalid);
 
     stateLabel_ = new QLabel("starting");
     serverLabel_ = new QLabel;
@@ -820,8 +822,33 @@ void MainWindow::invalidateBaseline(const QString& reason) {
     storage_.invalidateBaselines(channelSerial_, QDateTime::currentDateTimeUtc());
     baseline_.invalidate();
     state_.onBaselineInvalid();
-    diagnosticsScreen_->appendLog("[baseline] invalidated: " + reason);
+    logEvent("[baseline] invalidated: " + reason);
     updateStatusBar();
+}
+
+// Spec 2.2 #5 and 6.2: the operator marks the baseline invalid when
+// something the software cannot see has changed - the fiber moved, the room
+// warmed up. FIRemote has no way to read the integration time either, so
+// that change is reported here too. The reason is logged.
+void MainWindow::askBaselineInvalid() {
+    if (!baseline_.hasBaseline())
+        return;
+    auto* dialog = new QInputDialog(this);
+    dialog->setWindowTitle("Baseline invalid");
+    dialog->setLabelText("Why is the baseline no longer valid? (logged)");
+    dialog->setComboBoxItems({"fiber moved", "room temperature changed > 5 °F",
+                              "integration time changed", "lamp changed or power cut"});
+    dialog->setComboBoxEditable(true);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QInputDialog::textValueSelected, this, [this](const QString& text) {
+        const QString reason = text.trimmed();
+        if (reason.isEmpty() || !baseline_.hasBaseline())
+            return;
+        const QString who = measureScreen_->operatorName().trimmed();
+        invalidateBaseline(QString("operator %1: %2")
+                               .arg(who.isEmpty() ? QString("(no name)") : who, reason));
+    });
+    dialog->open();
 }
 
 void MainWindow::refreshDiagnostics() {
@@ -879,6 +906,9 @@ void MainWindow::updateStatusBar() {
     warmUpLabel_->setStyleSheet("color: #b05000;");
     baselineAction_->setEnabled(warm);
     skipWarmUpAction_->setVisible(!warm);
+    baselineInvalidAction_->setEnabled(baseline_.hasBaseline() &&
+                                       state_.state() != f20app::AppState::Baselining &&
+                                       state_.state() != f20app::AppState::Fault);
     const f20app::BaselineLimits limits = recipeLimits_.forRecipe(limitsRecipe_.toStdString());
     baselineLabel_->setToolTip(QString("limits for '%1': yellow after %2 min, red after %3 min")
                                    .arg(limitsRecipe_)
