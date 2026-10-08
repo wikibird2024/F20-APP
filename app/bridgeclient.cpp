@@ -1,10 +1,21 @@
 #include "bridgeclient.h"
 
+#include "f20/logtext.h"
+
 #include <QRandomGenerator>
 #include <QtDebug>
 
 #include <algorithm>
 #include <climits>
+
+namespace
+{
+// Log a protocol line without full spectra (spec 2.4 #6).
+QString logText(const std::string &line)
+{
+    return QString::fromStdString(f20::shortenForLog(line));
+}
+} // namespace
 
 BridgeClient::BridgeClient(QObject *parent) : QObject(parent)
 {
@@ -187,7 +198,7 @@ void BridgeClient::sendRequest(const QString &cmd, const f20::json &params, Pend
     socket_.write(line.data(), static_cast<qint64>(line.size()));
     socket_.write("\n", 1);
     if (!isHeartbeat) // every 10 s - would bury the real traffic in the log
-        emit protocolLog("-> " + QString::fromStdString(line));
+        emit protocolLog("-> " + logText(line));
 }
 
 void BridgeClient::onRequestTimeout(int id)
@@ -254,19 +265,19 @@ void BridgeClient::handleLine(const std::string &line)
         heartbeatMisses_ = 0; // any reply proves the bridge is alive
         const auto it = pending_.find(reply->id);
         if (it == pending_.end()) {
-            emit protocolLog("<- [no open request] " + QString::fromStdString(line));
+            emit protocolLog("<- [no open request] " + logText(line));
             return;
         }
         const Pending entry = std::move(it->second);
         pending_.erase(it);
         entry.timeout->deleteLater();
         if (!entry.isHeartbeat)
-            emit protocolLog("<- " + QString::fromStdString(line));
+            emit protocolLog("<- " + logText(line));
         deliver(entry, *reply);
     } else if (const auto *event = std::get_if<f20::Event>(&incoming)) {
-        emit protocolLog("<- " + QString::fromStdString(line));
+        emit protocolLog("<- " + logText(line));
         emit eventReceived(QString::fromStdString(event->event), event->data);
     } else {
-        emit protocolLog("<- [unreadable] " + QString::fromStdString(line));
+        emit protocolLog("<- [unreadable] " + logText(line));
     }
 }

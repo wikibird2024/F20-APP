@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "f20/logtext.h"
 #include "f20/protocol.h"
 
 using namespace f20;
@@ -70,4 +71,43 @@ TEST_CASE("fields of the wrong type never throw (nlohmann value() would)") {
 TEST_CASE("an id that does not fit in int is rejected, not narrowed") {
     CHECK_FALSE(parseRequest(R"({"id":4294967297,"cmd":"getStatus"})").has_value());
     CHECK(std::holds_alternative<std::monostate>(parseIncoming(R"({"id":-4294967297,"ok":true})")));
+}
+
+TEST_CASE("log text: a spectrum reply keeps its id but not its 512 values") {
+    std::vector<double> values(512, 0.25);
+    const std::string line =
+        serialize(okReply(7, {{"wavelengthNm", values}, {"reflectance", values}}));
+    REQUIRE(line.size() > 1000);
+
+    const std::string logged = shortenForLog(line);
+    CHECK(logged.find(R"("id":7)") != std::string::npos);
+    CHECK(logged.find(R"("reflectance":"[512 values]")") != std::string::npos);
+    CHECK(logged.size() < 200);
+}
+
+TEST_CASE("log text: short lines are logged exactly as sent") {
+    const std::string line = R"({"id":3,"cmd":"setRecipe","params":{"name":"SiO2 on Si"}})";
+    CHECK(shortenForLog(line) == line);
+}
+
+TEST_CASE("log text: keys keep their wire order; nested long arrays are collapsed") {
+    std::vector<int> many(100, 1);
+    const std::string line = nlohmann::json{{"id", 1}, {"result", {{"layers", {{{"pts", many}}}}}}}.dump();
+    const std::string logged = shortenForLog(line, 16, 50);
+    CHECK(logged.find("[100 values]") != std::string::npos);
+    CHECK(logged.find("\"id\"") < logged.find("\"result\""));
+}
+
+TEST_CASE("log text: long non-JSON is cut with its length, garbage never throws") {
+    const std::string text(5000, 'x');
+    const std::string logged = shortenForLog(text);
+    CHECK(logged.size() < 1100);
+    CHECK(logged.find("... (5000 chars)") != std::string::npos);
+
+    // Cut inside a 2-byte UTF-8 character: the character is dropped whole.
+    const std::string accents = std::string(999, 'a') + "\xc3\xa9" + std::string(10, 'b');
+    CHECK(shortenForLog(accents).substr(0, 1000) == std::string(999, 'a') + ".");
+
+    CHECK_NOTHROW(shortenForLog(std::string(2000, '{')));
+    CHECK_NOTHROW(shortenForLog("[" + std::string(2000, '\xff') + "]"));
 }

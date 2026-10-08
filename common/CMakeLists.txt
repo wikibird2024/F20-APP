@@ -4,6 +4,7 @@ add_library(f20common STATIC
     src/framing.cpp
     src/errors.cpp
     src/jsonread.cpp
+    src/logtext.cpp
     src/protocol.cpp
     src/results.cpp
 )
